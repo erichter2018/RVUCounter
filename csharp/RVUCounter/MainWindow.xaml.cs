@@ -1,0 +1,261 @@
+﻿using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using RVUCounter.Core;
+using RVUCounter.Models;
+using RVUCounter.ViewModels;
+using RVUCounter.Views;
+using Serilog;
+
+namespace RVUCounter;
+
+/// <summary>
+/// Main window code-behind.
+/// </summary>
+public partial class MainWindow : Window
+{
+    private MainViewModel? ViewModel => DataContext as MainViewModel;
+    private HwndSource? _hwndSource;
+
+    // WM_COPYDATA constants for MosaicTools integration
+    private const int WM_COPYDATA = 0x004A;
+    private const int CYCLEDATA_STUDY_SIGNED = 1;
+    private const int CYCLEDATA_STUDY_UNSIGNED = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COPYDATASTRUCT
+    {
+        public IntPtr dwData;
+        public int cbData;
+        public IntPtr lpData;
+    }
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        // Apply dark title bar based on current theme
+        ThemeManager.ApplyCurrentThemeTitleBar(this);
+
+        Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
+    }
+
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        // Hook into window procedure for WM_COPYDATA messages from MosaicTools
+        _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        _hwndSource?.AddHook(WndProc);
+        Log.Debug("WM_COPYDATA hook installed for MosaicTools integration");
+
+        // Subscribe to scroll to top event
+        if (ViewModel != null)
+        {
+            ViewModel.ScrollToTopRequested += OnScrollToTopRequested;
+        }
+
+        // Restore saved window position
+        var savedPos = ViewModel?.GetSavedWindowPosition();
+        Log.Debug("MainWindow loaded - saved position: {Pos}", savedPos != null
+            ? $"X={savedPos.X}, Y={savedPos.Y}, W={savedPos.Width}, H={savedPos.Height}"
+            : "null");
+
+        if (savedPos != null && savedPos.Width > 0 && savedPos.Height > 0)
+        {
+            // Validate position is on screen
+            var screenWidth = SystemParameters.VirtualScreenWidth;
+            var screenHeight = SystemParameters.VirtualScreenHeight;
+            var screenLeft = SystemParameters.VirtualScreenLeft;
+            var screenTop = SystemParameters.VirtualScreenTop;
+
+            Log.Debug("Virtual screen bounds: L={L}, T={T}, W={W}, H={H}",
+                screenLeft, screenTop, screenWidth, screenHeight);
+
+            // Check if saved position is within virtual screen bounds (handles multi-monitor)
+            if (savedPos.X >= screenLeft && savedPos.X < screenLeft + screenWidth - 50 &&
+                savedPos.Y >= screenTop && savedPos.Y < screenTop + screenHeight - 50)
+            {
+                Left = savedPos.X;
+                Top = savedPos.Y;
+                Width = savedPos.Width;
+                Height = savedPos.Height;
+                Log.Debug("Restored window position: X={X}, Y={Y}", Left, Top);
+                return;
+            }
+            else
+            {
+                Log.Warning("Saved position out of screen bounds, using default");
+            }
+        }
+
+        // Position at right side of primary screen if no valid saved position
+        var primaryWidth = SystemParameters.PrimaryScreenWidth;
+        var primaryHeight = SystemParameters.PrimaryScreenHeight;
+        Width = 260;
+        Height = 580;
+        Left = primaryWidth - Width - 20;
+        Top = (primaryHeight - Height) / 2;
+        Log.Debug("Using default position: X={X}, Y={Y}", Left, Top);
+    }
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        // Unhook WM_COPYDATA handler
+        _hwndSource?.RemoveHook(WndProc);
+
+        // Unsubscribe from scroll to top event
+        if (ViewModel != null)
+        {
+            ViewModel.ScrollToTopRequested -= OnScrollToTopRequested;
+        }
+
+        // Save window position before disposing
+        Log.Debug("MainWindow closing - saving position: X={X}, Y={Y}, W={W}, H={H}", Left, Top, Width, Height);
+        ViewModel?.SaveWindowPosition(Left, Top, Width, Height);
+        ViewModel?.Dispose();
+    }
+
+    /// <summary>
+    /// Window procedure hook to handle WM_COPYDATA messages from MosaicTools.
+    /// </summary>
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_COPYDATA)
+        {
+            try
+            {
+                var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(lParam);
+                var messageType = cds.dwData.ToInt32();
+                var accession = Marshal.PtrToStringUni(cds.lpData);
+
+                if (!string.IsNullOrEmpty(accession))
+                {
+                    if (messageType == CYCLEDATA_STUDY_SIGNED)
+                    {
+                        Log.Information("MosaicTools: Study SIGNED - {Accession}", accession);
+                        ViewModel?.HandleMosaicToolsSignedStudy(accession);
+                        handled = true;
+                    }
+                    else if (messageType == CYCLEDATA_STUDY_UNSIGNED)
+                    {
+                        Log.Information("MosaicTools: Study UNSIGNED - {Accession}", accession);
+                        ViewModel?.HandleMosaicToolsUnsignedStudy(accession);
+                        handled = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error processing WM_COPYDATA message");
+            }
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left)
+        {
+            DragMove();
+        }
+    }
+
+    private void Minimize_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState.Minimized;
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private void Study_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Border border && border.DataContext is StudyRecord study)
+        {
+            var menu = new ContextMenu();
+
+            var deleteItem = new MenuItem
+            {
+                Header = $"Delete: {study.StudyType} ({study.Rvu:F2} RVU)"
+            };
+            deleteItem.Click += (s, args) =>
+            {
+                ViewModel?.DeleteStudyCommand.Execute(study);
+            };
+
+            menu.Items.Add(deleteItem);
+            menu.IsOpen = true;
+        }
+    }
+
+    private void PaceCar_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (ViewModel == null) return;
+
+        // Get click position for dialog placement
+        var clickPos = PointToScreen(e.GetPosition(this));
+
+        // Open the pace comparison dialog
+        var dialog = new PaceComparisonDialog(
+            ViewModel.DataManager,
+            (mode, shift) =>
+            {
+                // Only call the command - it handles setting the mode
+                try
+                {
+                    ViewModel.ChangePaceComparisonCommand.Execute(mode);
+                }
+                catch (Exception ex)
+                {
+                    Serilog.Log.Error(ex, "Error changing pace comparison mode to {Mode}", mode);
+                }
+            },
+            new Point(clickPos.X, clickPos.Y + 10));
+
+        dialog.Owner = this;
+        dialog.Show();
+    }
+
+    private void OnScrollToTopRequested(object? sender, EventArgs e)
+    {
+        // Scroll the recent studies list to top
+        RecentStudiesScrollViewer?.ScrollToTop();
+    }
+
+    private void RecentStudy_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Show study details on left click
+        if (sender is Border border && border.DataContext is StudyRecord study)
+        {
+            ViewModel?.ShowStudyDetailsCommand.Execute(study);
+            e.Handled = true;
+        }
+    }
+
+    private void StudyDetailsOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Close popup when clicking the overlay (background)
+        if (e.OriginalSource == sender)
+        {
+            ViewModel?.CloseStudyDetailsCommand.Execute(null);
+        }
+    }
+
+    private void TeamPanelHeader_Click(object sender, MouseButtonEventArgs e)
+    {
+        // Toggle team panel collapse/expand
+        ViewModel?.ToggleTeamPanelCommand.Execute(null);
+    }
+
+    private void TeamModeToggle_Click(object sender, MouseButtonEventArgs e)
+    {
+        // Toggle between Rate and Total view modes
+        ViewModel?.ToggleTeamViewModeCommand.Execute(null);
+        e.Handled = true; // Prevent header click from also firing
+    }
+}

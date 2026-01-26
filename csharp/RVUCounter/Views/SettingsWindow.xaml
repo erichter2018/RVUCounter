@@ -1,0 +1,536 @@
+<Window x:Class="RVUCounter.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings"
+        Width="580" Height="700"
+        WindowStartupLocation="Manual"
+        ResizeMode="CanResize"
+        MinWidth="500" MinHeight="500"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextElement.Foreground="{DynamicResource PrimaryTextBrush}">
+    
+    <Window.Resources>
+        <Style x:Key="SettingLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <Style x:Key="CheckItem" TargetType="CheckBox">
+            <Setter Property="Margin" Value="0,3"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+        </Style>
+
+        <!-- Dark mode compatible TabItem style -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Border"
+                                Background="{DynamicResource CardBackgroundBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1,1,1,0"
+                                CornerRadius="4,4,0,0"
+                                Padding="{TemplateBinding Padding}"
+                                Margin="0,0,2,0">
+                            <ContentPresenter x:Name="ContentSite"
+                                              ContentSource="Header"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
+                                <Setter TargetName="Border" Property="BorderThickness" Value="1,1,1,0"/>
+                                <Setter TargetName="Border" Property="Margin" Value="0,0,2,-1"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="False">
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource WindowBackgroundBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource HoverBackgroundBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dark mode compatible TextBox style -->
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource InputBackgroundBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Padding" Value="4,2"/>
+        </Style>
+
+        <!-- Dark mode compatible RadioButton style -->
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+        </Style>
+    </Window.Resources>
+    
+    <Grid Margin="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <TabControl Grid.Row="0" Background="{DynamicResource PanelBackgroundBrush}" BorderBrush="{DynamicResource BorderBrush}">
+            <!-- General Tab -->
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="15">
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Shift Settings"/>
+                        
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SettingLabel}" Text="Shift Length (hours):"/>
+                            <TextBox Grid.Column="1" Text="{Binding ShiftLengthHours}" HorizontalAlignment="Left" Width="60"/>
+                        </Grid>
+                        
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SettingLabel}" Text="Min Study Duration (sec):"/>
+                            <TextBox Grid.Column="1" Text="{Binding MinStudySeconds}" HorizontalAlignment="Left" Width="60"/>
+                        </Grid>
+                        
+                        <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
+                        
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Window Behavior"/>
+                        
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Always on top" IsChecked="{Binding AlwaysOnTop}"/>
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Start minimized" IsChecked="{Binding StartMinimized}"/>
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Auto-resume shift on launch" IsChecked="{Binding AutoResumeOnStartup}"/>
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Dark Mode" IsChecked="{Binding DarkMode}"/>
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Show time in display" IsChecked="{Binding ShowTime}"/>
+
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Font Size:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <Button Grid.Column="1" Content=" − " Padding="6,2" Margin="0,0,4,0"
+                                    Command="{Binding DecreaseFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <TextBlock Grid.Column="2" Text="{Binding FontSizeDisplayText}"
+                                       VerticalAlignment="Center" HorizontalAlignment="Center"
+                                       Width="60" TextAlignment="Center"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
+                            <Button Grid.Column="3" Content=" + " Padding="6,2" Margin="4,0,8,0"
+                                    Command="{Binding IncreaseFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <Button Grid.Column="4" Content="Reset" Padding="6,2"
+                                    Command="{Binding ResetFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                        </Grid>
+                        <TextBlock Text="Adjust font size for all windows (live preview)"
+                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,2,0,0"/>
+
+                        <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Data Handling"/>
+                        
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Ignore duplicate accessions" IsChecked="{Binding IgnoreDuplicateAccessions}"/>
+
+                        <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="MosaicTools Integration"/>
+
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Wait for MosaicTools signed/unsigned" IsChecked="{Binding MosaicToolsIntegrationEnabled}"/>
+                        <TextBlock Text="When enabled, studies are only counted if MosaicTools confirms they were signed."
+                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,2,0,5"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <TextBlock Text="Timeout (seconds):" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBox Text="{Binding MosaicToolsTimeoutSeconds}" Width="50"
+                                     Background="{DynamicResource InputBackgroundBrush}"
+                                     Foreground="{DynamicResource PrimaryTextBrush}"
+                                     BorderBrush="{DynamicResource BorderBrush}"/>
+                            <TextBlock Text="(default to counting if no response)" VerticalAlignment="Center"
+                                       FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                        <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Updates"/>
+
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Automatically check for updates on startup" IsChecked="{Binding AutoUpdateEnabled}"/>
+                        <TextBlock Text="When enabled, the app will check for updates when launched and automatically install them."
+                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,2,0,5"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="Check for Updates" Padding="10,5"
+                                    Command="{Binding CheckForUpdatesCommand}"
+                                    IsEnabled="{Binding IsCheckingForUpdates, Converter={StaticResource InverseBoolConverter}}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <TextBlock Text="{Binding UpdateStatusMessage}" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SecondaryTextBrush}" Margin="10,0,0,0"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Display Tab -->
+            <TabItem Header="Display">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="15">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Left Column: Show Counters -->
+                            <StackPanel Grid.Column="0" Margin="0,0,15,0">
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="Show Counters"/>
+
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Total wRVU" IsChecked="{Binding ShowTotal}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Average per hour" IsChecked="{Binding ShowAvg}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Last hour" IsChecked="{Binding ShowLastHour}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Last full hour" IsChecked="{Binding ShowLastFullHour}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. this hour" IsChecked="{Binding ShowProjected}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. shift total" IsChecked="{Binding ShowProjectedShift}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Pace vs prior shift" IsChecked="{Binding ShowPaceCar}"/>
+                            </StackPanel>
+
+                            <!-- Right Column: Show Compensation -->
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Style="{StaticResource SectionHeader}" Text="Show Compensation"/>
+
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Total" IsChecked="{Binding ShowCompTotal}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Average per hour" IsChecked="{Binding ShowCompAvg}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Last hour" IsChecked="{Binding ShowCompLastHour}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Last full hour" IsChecked="{Binding ShowCompLastFullHour}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. this hour" IsChecked="{Binding ShowCompProjected}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. shift total" IsChecked="{Binding ShowCompProjectedShift}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Team Dashboard Section -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="TEAM DASHBOARD"/>
+
+                        <TextBlock Text="Compare your RVU progress with teammates in real-time. See anonymous team stats displayed as shuffled bars - no names, no rankings, just friendly motivation to keep pace."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11" Margin="0,0,0,10"/>
+
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Enable Team Dashboard" IsChecked="{Binding TeamDashboardEnabled}"/>
+
+                        <!-- Privacy Info Box -->
+                        <Border Background="{DynamicResource LightAccentBrush}"
+                                BorderBrush="{DynamicResource AccentBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="10"
+                                Margin="0,10,0,10">
+                            <StackPanel>
+                                <TextBlock Text="PRIVACY INFORMATION" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="This feature shares ONLY:" FontWeight="SemiBold" Margin="0,0,0,3"/>
+                                <TextBlock Text="  • Total RVU count (not individual studies)" FontSize="11"/>
+                                <TextBlock Text="  • Study count (just the number)" FontSize="11"/>
+                                <TextBlock Text="  • Whether your shift is active" FontSize="11" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="This feature NEVER shares:" FontWeight="SemiBold" Margin="0,0,0,3"/>
+                                <TextBlock Text="  • Your name or any identifying information" FontSize="11"/>
+                                <TextBlock Text="  • Patient data, accessions, or procedures" FontSize="11"/>
+                                <TextBlock Text="  • Your location or IP address" FontSize="11" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="For additional privacy, team stats are only visible when 4 or more team members are online."
+                                           TextWrapping="Wrap" FontSize="11" FontStyle="Italic" Margin="0,0,0,5"/>
+                                <TextBlock Text="You can disable this at any time." FontSize="11" FontStyle="Italic"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Team Code Input/Display -->
+                        <Grid Margin="0,5,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Team Code:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="1" Text="{Binding TeamCode, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="Consolas" Margin="0,0,8,0"
+                                     ToolTip="Enter a code to join, or create a new team to get a code"/>
+                            <Button Grid.Column="2" Content="Copy" Padding="8,4"
+                                    Command="{Binding CopyTeamCodeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"
+                                    ToolTip="Copy code to clipboard for sharing"/>
+                        </Grid>
+
+                        <!-- Team Action Buttons -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                            <Button Content="Create New Team" Padding="10,5" Margin="0,0,8,0"
+                                    Command="{Binding CreateTeamCommand}"
+                                    IsEnabled="{Binding IsTeamOperationInProgress, Converter={StaticResource InverseBoolConverter}}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"
+                                    ToolTip="Create a new team and get a code to share"/>
+                            <Button Content="Join Team" Padding="10,5" Margin="0,0,8,0"
+                                    Command="{Binding JoinTeamCommand}"
+                                    IsEnabled="{Binding IsTeamOperationInProgress, Converter={StaticResource InverseBoolConverter}}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"
+                                    ToolTip="Join using the code above"/>
+                            <Button Content="Leave Team" Padding="10,5"
+                                    Command="{Binding LeaveTeamCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"
+                                    ToolTip="Disconnect from your current team"/>
+                        </StackPanel>
+
+                        <!-- Status Display -->
+                        <TextBlock Text="{Binding TeamStatusMessage}"
+                                   Foreground="{DynamicResource SecondaryTextBrush}"
+                                   FontSize="11"
+                                   Margin="0,5,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            
+            <!-- Compensation Tab -->
+            <TabItem Header="Compensation">
+                <StackPanel Margin="15">
+                    <TextBlock Style="{StaticResource SectionHeader}" Text="RVU Compensation Rates"/>
+                    <TextBlock Text="Compensation is calculated using time-based rates that vary by hour, weekday/weekend, and your role. The rate at the time each study is completed determines its compensation value."
+                               TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11" Margin="0,0,0,15"/>
+
+                    <TextBlock Text="Your Role:" Margin="0,0,0,5" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,15">
+                        <RadioButton Content="Partner" IsChecked="{Binding Role, Converter={StaticResource StringToBoolConverter}, ConverterParameter=Partner}" Margin="0,0,20,0" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                        <RadioButton Content="Associate" IsChecked="{Binding Role, Converter={StaticResource StringToBoolConverter}, ConverterParameter=Associate}" Foreground="{DynamicResource PrimaryTextBrush}"/>
+                    </StackPanel>
+
+                    <TextBlock Text="Rate Range:" Margin="0,0,0,5" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding CompensationRateInfo}" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,0,0,15"/>
+
+                    <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
+
+                    <TextBlock Text="Note: Custom per-user compensation rates may be added in a future update."
+                               TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11" FontStyle="Italic"/>
+                </StackPanel>
+            </TabItem>
+            
+            <!-- Backup Tab -->
+            <TabItem Header="Backup">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="15">
+                        <!-- Backup Configuration - Side by Side -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Backup Configuration"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="15"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- OneDrive Config (Left) -->
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="OneDrive Backup" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Enable OneDrive backup" IsChecked="{Binding CloudBackupEnabled}"/>
+                            </StackPanel>
+
+                            <!-- Dropbox Config (Right) -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Dropbox Backup" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Enable Dropbox backup" IsChecked="{Binding DropboxEnabled}"/>
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="App Key:" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Column="1" Text="{Binding DropboxAppKey}" Width="140" HorizontalAlignment="Left"/>
+                                </Grid>
+                                <Button Content="Authorize Dropbox" Padding="8,4" Margin="0,8,0,0"
+                                        HorizontalAlignment="Left" Click="AuthorizeDropbox_Click"
+                                        Background="{DynamicResource ButtonBackgroundBrush}"
+                                        Foreground="{DynamicResource ButtonTextBrush}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Actions Section -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Actions"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBlock Text="Schedule:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox SelectedValue="{Binding BackupSchedule}" SelectedValuePath="Tag" Width="130">
+                                <ComboBoxItem Content="After shift ends" Tag="shift_end"/>
+                                <ComboBoxItem Content="Hourly" Tag="hourly"/>
+                                <ComboBoxItem Content="Daily" Tag="daily"/>
+                                <ComboBoxItem Content="Manual only" Tag="manual"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Backup Now" Padding="10,5" Margin="0,0,10,0"
+                                    Command="{Binding BackupNowCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <Button Content="Refresh Lists" Padding="10,5"
+                                    Command="{Binding RefreshBackupListsCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <TextBlock Text="Loading backups..." VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsLoadingBackups}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+
+                        <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Backup Lists - Side by Side -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Saved Backups"/>
+                        <TextBlock Text="Right-click for options (restore or delete)" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11" Margin="0,0,0,8"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- OneDrive Backups List (Left) -->
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="OneDrive" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ListBox ItemsSource="{Binding OneDriveBackups}"
+                                         SelectedItem="{Binding SelectedOneDriveBackup}"
+                                         Height="150"
+                                         Background="{DynamicResource InputBackgroundBrush}"
+                                         Foreground="{DynamicResource PrimaryTextBrush}"
+                                         BorderBrush="{DynamicResource BorderBrush}">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Restore from this backup" Command="{Binding RestoreOneDriveBackupCommand}"
+                                                      CommandParameter="{Binding SelectedOneDriveBackup}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Delete" Command="{Binding DeleteOneDriveBackupCommand}"
+                                                      CommandParameter="{Binding SelectedOneDriveBackup}"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="50"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding FileName}" VerticalAlignment="Center" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding SizeDisplay}"
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+
+                            <!-- Dropbox Backups List (Right) -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Dropbox" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ListBox ItemsSource="{Binding DropboxBackups}"
+                                         SelectedItem="{Binding SelectedDropboxBackup}"
+                                         Height="150"
+                                         Background="{DynamicResource InputBackgroundBrush}"
+                                         Foreground="{DynamicResource PrimaryTextBrush}"
+                                         BorderBrush="{DynamicResource BorderBrush}">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Restore from this backup" Command="{Binding RestoreDropboxBackupCommand}"
+                                                      CommandParameter="{Binding SelectedDropboxBackup}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Delete" Command="{Binding DeleteDropboxBackupCommand}"
+                                                      CommandParameter="{Binding SelectedDropboxBackup}"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="50"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding FileName}" VerticalAlignment="Center" FontSize="11"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding SizeDisplay}"
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            
+            <!-- About Tab -->
+            <TabItem Header="About">
+                <StackPanel Margin="15">
+                    <TextBlock Text="RVU Counter" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock Text="{Binding AppVersionDisplay}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,5,0,15"/>
+                    
+                    <TextBlock Text="Automatically counts radiology studies as you work." 
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    
+                    <TextBlock Text="Features:" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                    <TextBlock Text="• Automatic study detection from Mosaic" Margin="10,2"/>
+                    <TextBlock Text="• RVU tracking and compensation calculation" Margin="10,2"/>
+                    <TextBlock Text="• Detailed statistics and breakdowns" Margin="10,2"/>
+                    <TextBlock Text="• Cloud backup integration" Margin="10,2"/>
+                    <TextBlock Text="• Dark mode support" Margin="10,2"/>
+                    <TextBlock Text="• Configurable counter visibility" Margin="10,2"/>
+                    
+                    <Separator Margin="0,20" Background="{DynamicResource SeparatorBrush}"/>
+                    
+                    <TextBlock Text="Data is stored locally and all accession numbers are hashed for privacy." 
+                               TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"/>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+        
+        <!-- Buttons -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
+            <Button Content="Cancel" Padding="20,8" Margin="0,0,10,0" Click="Cancel_Click"/>
+            <Button Content="Save" Padding="20,8" Click="Save_Click" 
+                    Background="{DynamicResource AccentBrush}" Foreground="White" BorderThickness="0"/>
+        </StackPanel>
+    </Grid>
+</Window>

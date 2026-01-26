@@ -1,0 +1,86 @@
+<UserControl x:Class="RVUCounter.Views.PaceCarControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:local="clr-namespace:RVUCounter.Views"
+             xmlns:conv="clr-namespace:RVUCounter.Converters"
+             mc:Ignorable="d"
+             d:DesignHeight="36" d:DesignWidth="240">
+
+    <UserControl.Resources>
+        <conv:PercentToWidthConverter x:Key="PercentToWidthConverter"/>
+    </UserControl.Resources>
+
+    <Grid Margin="0,0,0,2">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="20"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Progress Bars Container (two stacked bars) -->
+        <Grid Grid.Row="0" x:Name="BarContainer" Background="{DynamicResource PanelBackgroundBrush}">
+            <Canvas>
+                <!-- Current bar track (top) -->
+                <Border Height="9" Canvas.Top="1" Canvas.Left="0" Background="#E8E8E8" CornerRadius="1">
+                    <Border.Width>
+                        <Binding ElementName="BarContainer" Path="ActualWidth"/>
+                    </Border.Width>
+                </Border>
+
+                <!-- Current bar fill (sky blue) -->
+                <Border Height="9" Canvas.Top="1" Canvas.Left="0" Background="#87CEEB" CornerRadius="1">
+                    <Border.Width>
+                        <MultiBinding Converter="{StaticResource PercentToWidthConverter}">
+                            <Binding Path="CurrentBarFactor"/>
+                            <Binding ElementName="BarContainer" Path="ActualWidth"/>
+                        </MultiBinding>
+                    </Border.Width>
+                </Border>
+
+                <!-- Prior bar track (bottom, lavender) -->
+                <Border Height="9" Canvas.Top="11" Canvas.Left="0" Background="#B8B8DC" CornerRadius="1">
+                    <Border.Width>
+                        <MultiBinding Converter="{StaticResource PercentToWidthConverter}">
+                            <Binding Path="PriorBarFactor"/>
+                            <Binding ElementName="BarContainer" Path="ActualWidth"/>
+                        </MultiBinding>
+                    </Border.Width>
+                </Border>
+
+                <!-- Prior marker (black/white line showing "prior at this time") -->
+                <Border Height="9" Width="2" Canvas.Top="11" Background="{DynamicResource PaceMarkerBrush}">
+                    <Canvas.Left>
+                        <MultiBinding Converter="{StaticResource PercentToWidthConverter}">
+                            <Binding Path="TargetMarkerFactor"/>
+                            <Binding ElementName="BarContainer" Path="ActualWidth"/>
+                        </MultiBinding>
+                    </Canvas.Left>
+                </Border>
+            </Canvas>
+        </Grid>
+
+        <!-- Text line: Now: 4.3 | Prior: 12.3 at 11:49 pm | ▼ -8.0 behind -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="2,1,2,0">
+            <!-- Now: -->
+            <TextBlock Text="Now:" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+            <!-- Current RVU value -->
+            <TextBlock Text="{Binding TotalRvu, StringFormat=' {0:F1}'}" FontSize="9" FontWeight="Bold"
+                       Foreground="#87CEEB" VerticalAlignment="Center"/>
+            <!-- Separator -->
+            <TextBlock Text=" | " FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+            <!-- Prior: (or comparison label) -->
+            <TextBlock Text="{Binding PaceCompareLabel}" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+            <!-- Prior RVU value -->
+            <TextBlock Text="{Binding TargetRvu, StringFormat=' {0:F1}'}" FontSize="9" FontWeight="Bold"
+                       Foreground="#9090C0" VerticalAlignment="Center"/>
+            <!-- at time -->
+            <TextBlock Text="{Binding PaceTimeText}" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+            <!-- Spacer -->
+            <TextBlock Text=" | " FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+            <!-- Diff text (▼ -8.0 behind) -->
+            <TextBlock Text="{Binding PaceDiffText}" FontSize="9" FontWeight="Bold"
+                       Foreground="{Binding DiffColor}" VerticalAlignment="Center"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

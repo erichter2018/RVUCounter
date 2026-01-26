@@ -1,0 +1,97 @@
+<Window x:Class="RVUCounter.Views.HIPAAWarningWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CRITICAL PRIVACY WARNING"
+        Width="620" Height="550"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Topmost="True"
+        WindowStyle="SingleBorderWindow">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,15">
+            <TextBlock Text="&#x26A0;"
+                       FontSize="36"
+                       VerticalAlignment="Center"
+                       Margin="0,0,15,0"/>
+            <TextBlock Text="HIPAA COMPLIANCE WARNING"
+                       FontSize="20"
+                       FontWeight="Bold"
+                       Foreground="DarkRed"
+                       VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Content -->
+        <StackPanel Grid.Row="1">
+            <TextBlock TextWrapping="Wrap" FontSize="13" Margin="0,0,0,15">
+                This application currently stores raw Patient Accession Numbers.
+                <LineBreak/><LineBreak/>
+                Storing Unencrypted Protected Health Information (PHI) is a violation
+                of HIPAA regulations, especially when using cloud backups (OneDrive/Dropbox).
+                <LineBreak/><LineBreak/>
+                To ensure compliance, you must migrate to a Hashed Accession system.
+                This will convert all accession numbers into secure, irreversible codes.
+            </TextBlock>
+
+            <!-- What will happen -->
+            <GroupBox Header="What will happen?" Padding="10" Margin="0,0,0,15">
+                <TextBlock TextWrapping="Wrap" FontSize="12">
+                    1. A secure local backup of your current data will be created.
+                    <LineBreak/>
+                    2. All database records will be cryptographically hashed.
+                    <LineBreak/>
+                    3. Your CLOUD BACKUPS will be sanitized (OneDrive).
+                    <LineBreak/>
+                    4. Future data will be stored securely.
+                </TextBlock>
+            </GroupBox>
+
+            <!-- Progress UI (Hidden initially) -->
+            <StackPanel x:Name="ProgressPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                <TextBlock x:Name="ProgressLabel"
+                           Text="Preparing..."
+                           FontSize="12"
+                           Margin="0,0,0,5"/>
+                <ProgressBar x:Name="ProgressBar"
+                             Height="20"
+                             Minimum="0"
+                             Maximum="100"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="2" HorizontalAlignment="Center" Margin="0,15,0,0">
+            <Button x:Name="MigrateButton"
+                    Content="BECOME COMPLIANT"
+                    Width="250"
+                    Height="35"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Margin="0,0,0,10"
+                    Click="MigrateButton_Click"/>
+
+            <Button x:Name="IgnoreButton"
+                    Content="Ignore Risk (Not Recommended)"
+                    Width="250"
+                    Height="30"
+                    FontSize="12"
+                    Click="IgnoreButton_Click"/>
+        </StackPanel>
+
+        <!-- Result indicator -->
+        <TextBlock Grid.Row="3"
+                   x:Name="ResultText"
+                   Text=""
+                   HorizontalAlignment="Center"
+                   Margin="0,10,0,0"
+                   FontWeight="Bold"/>
+    </Grid>
+</Window>

@@ -1,0 +1,40 @@
+﻿<Application x:Class="RVUCounter.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
+             xmlns:local="clr-namespace:RVUCounter"
+             xmlns:converters="clr-namespace:RVUCounter.Converters"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <!-- Bool to Visibility Converters -->
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <local:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVisibility"/>
+        <local:StringToBoolConverter x:Key="StringToBoolConverter"/>
+
+        <!-- New converters for Python parity -->
+        <converters:InverseBoolConverter x:Key="InverseBoolConverter"/>
+        <converters:TimeAgoConverter x:Key="TimeAgoConverter"/>
+        <converters:DurationConverter x:Key="DurationConverter"/>
+        <converters:ModalityColorConverter x:Key="ModalityColorConverter"/>
+        <converters:PaceDiffConverter x:Key="PaceDiffConverter"/>
+        <converters:SKColorToColorConverter x:Key="SKColorToColorConverter"/>
+        <converters:DollarToGreenConverter x:Key="DollarToGreenConverter"/>
+        <converters:DollarPartConverter x:Key="DollarPartConverter"/>
+        <converters:NonDollarPartConverter x:Key="NonDollarPartConverter"/>
+        <converters:TeamBarWidthConverter x:Key="TeamBarWidthConverter"/>
+        <converters:PercentToWidthConverter x:Key="PercentToWidthConverter"/>
+
+        <!-- Global Font Sizes (can be adjusted via settings) -->
+        <sys:Double x:Key="FontSizeXSmall">9</sys:Double>
+        <sys:Double x:Key="FontSizeSmall">10</sys:Double>
+        <sys:Double x:Key="FontSizeNormal">11</sys:Double>
+        <sys:Double x:Key="FontSizeMedium">12</sys:Double>
+        <sys:Double x:Key="FontSizeLarge">14</sys:Double>
+        <sys:Double x:Key="FontSizeXLarge">18</sys:Double>
+
+        <!-- Global Styles -->
+        <Style TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+        </Style>
+    </Application.Resources>
+</Application>

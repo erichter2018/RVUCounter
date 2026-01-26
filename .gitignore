@@ -1,0 +1,37 @@
+# Build outputs
+bin/
+obj/
+publish/
+
+# IDE files
+.vs/
+*.user
+*.suo
+
+# Logs and data
+logs/
+data/
+settings/user_settings.yaml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude local settings
+.claude/settings.local.json
+
+# Python artifacts (legacy)
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Python virtual environments
+venv/
+.venv/
+env/
+nul
+csharp/RVUCounter/nul
