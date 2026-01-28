@@ -65,8 +65,9 @@ csharp/RVUCounter/
 │   ├── DarkTheme.xaml      # Dark mode colors/brushes
 │   └── LightTheme.xaml     # Light mode colors/brushes
 │
-└── Resources/               # Embedded resources
-    └── rvu_rules.yaml      # Study classification rules
+└── Resources/               # Runtime resources (NOT embedded)
+    ├── rvu_rules.yaml      # Study classification rules
+    └── tbwu_rules.db       # TBWU lookup database
 ```
 
 ### Key Components
@@ -204,17 +205,20 @@ taskkill //F //IM RVUCounter.exe 2>/dev/null; sleep 1; c:/Users/erik.richter/Des
 
 ## Distribution
 
-**IMPORTANT: Always include `resources/rvu_rules.yaml` when distributing!**
+**IMPORTANT: Always include the `resources/` folder when distributing!**
 
-The `rvu_rules.yaml` file is NOT embedded in the executable - it's loaded from the filesystem at runtime. Without it, all studies will be classified as "Unknown" with 0 RVU.
+The following files are NOT embedded in the executable - they're loaded from the filesystem at runtime:
+- `resources/rvu_rules.yaml` - Study classification rules. Without it, all studies show as "Unknown" with 0 RVU.
+- `resources/tbwu_rules.db` - TBWU lookup database. Without it, TBWU-based compensation calculations are disabled.
 
 ### Release Checklist
 1. Update version in `Core/Config.cs` (AppVersion and AppVersionDate)
 2. Build: `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`
 3. Create release folder with:
    - `RVUCounter.exe` (from publish output)
-   - `resources/rvu_rules.yaml` (from publish output or source)
-4. Create zip containing both exe and resources folder
+   - `resources/rvu_rules.yaml` (from `csharp/RVUCounter/Resources/`)
+   - `resources/tbwu_rules.db` (from `csharp/RVUCounter/Resources/`)
+4. Create zip containing exe and resources folder
 5. Create GitHub Release at https://github.com/erichter2018/RVUCounter/releases
 6. Upload both `RVUCounter.exe` and `RVUCounter.zip`
 
