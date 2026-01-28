@@ -149,5 +149,32 @@ public static class PlatformUtils
         Directory.CreateDirectory(Config.GetLogsPath(root));
         Directory.CreateDirectory(Path.Combine(root, Config.HelpersFolder));
         Directory.CreateDirectory(Config.GetResourcesPath(root));
+
+        // Migrate legacy Python file locations (settings/ → resources/)
+        MigrateLegacyFile(root, Config.RulesFileName);
+        MigrateLegacyFile(root, Config.TbwuDatabaseFileName);
+    }
+
+    /// <summary>
+    /// Copy a file from settings/ to resources/ if it exists only in the legacy location.
+    /// Uses copy (not move) to avoid breaking a co-installed Python version.
+    /// </summary>
+    private static void MigrateLegacyFile(string root, string fileName)
+    {
+        var resourcePath = Path.Combine(Config.GetResourcesPath(root), fileName);
+        var legacyPath = Path.Combine(Config.GetSettingsPath(root), fileName);
+
+        if (!File.Exists(resourcePath) && File.Exists(legacyPath))
+        {
+            try
+            {
+                File.Copy(legacyPath, resourcePath);
+                Log.Information("Migrated {FileName} from settings/ to resources/", fileName);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to migrate {FileName} from settings/ to resources/", fileName);
+            }
+        }
     }
 }

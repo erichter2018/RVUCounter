@@ -30,8 +30,13 @@ public class UpdateManager
         _currentVersion = currentVersion ?? GetCurrentVersion();
         _githubOwner = githubOwner ?? Config.GitHubOwner;
         _githubRepo = githubRepo ?? Config.GitHubRepo;
-        _httpClient = new HttpClient();
+        _httpClient = new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = true,
+            MaxAutomaticRedirections = 10
+        });
         _httpClient.DefaultRequestHeaders.Add("User-Agent", $"RVUCounter/{_currentVersion}");
+        _httpClient.DefaultRequestHeaders.Add("Accept", "application/octet-stream");
     }
 
     /// <summary>
@@ -241,23 +246,30 @@ public class UpdateManager
         {
             Directory.CreateDirectory(tempDir);
 
-            var fileName = Path.GetFileName(downloadUrl);
+            // Strip query parameters from URL for filename
+            var uri = new Uri(downloadUrl);
+            var fileName = Path.GetFileName(uri.LocalPath);
+            if (string.IsNullOrEmpty(fileName))
+                fileName = "RVUCounter.zip";
             var tempFile = Path.Combine(tempDir, fileName);
 
             // Download with timeout
-            Log.Information("Downloading update from: {Url}", downloadUrl);
+            Log.Information("Downloading update from: {Url} (filename: {FileName})", downloadUrl, fileName);
 
             using var cts = new CancellationTokenSource(DownloadTimeout);
             using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+
+            Log.Information("Download response: {StatusCode} {ReasonPhrase}, ContentLength={ContentLength}",
+                (int)response.StatusCode, response.ReasonPhrase, response.Content.Headers.ContentLength);
             response.EnsureSuccessStatusCode();
 
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
             var downloadedBytes = 0L;
 
             await using var contentStream = await response.Content.ReadAsStreamAsync(cts.Token);
-            await using var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            await using var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
 
-            var buffer = new byte[8192];
+            var buffer = new byte[65536];
             int bytesRead;
 
             while ((bytesRead = await contentStream.ReadAsync(buffer, cts.Token)) > 0)
@@ -275,16 +287,17 @@ public class UpdateManager
 
             // Extract if ZIP, otherwise use the downloaded file directly
             string newExePath;
+            string? extractedDir = null;
             if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
-                var extractDir = Path.Combine(tempDir, "extracted");
-                ZipFile.ExtractToDirectory(tempFile, extractDir);
+                extractedDir = Path.Combine(tempDir, "extracted");
+                ZipFile.ExtractToDirectory(tempFile, extractedDir);
 
                 // Find the exe in the extracted folder
-                var exeFiles = Directory.GetFiles(extractDir, "RVUCounter.exe", SearchOption.AllDirectories);
+                var exeFiles = Directory.GetFiles(extractedDir, "RVUCounter.exe", SearchOption.AllDirectories);
                 if (exeFiles.Length == 0)
                 {
-                    exeFiles = Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories);
+                    exeFiles = Directory.GetFiles(extractedDir, "*.exe", SearchOption.AllDirectories);
                 }
 
                 if (exeFiles.Length == 0)
@@ -302,7 +315,7 @@ public class UpdateManager
             }
 
             // Apply the update using rename approach
-            return ApplyUpdate(newExePath);
+            return ApplyUpdate(newExePath, extractedDir);
         }
         catch (TaskCanceledException)
         {
@@ -341,7 +354,7 @@ public class UpdateManager
     /// Apply update by renaming files.
     /// Windows allows renaming files that are in use, making this approach robust.
     /// </summary>
-    private bool ApplyUpdate(string newExePath)
+    private bool ApplyUpdate(string newExePath, string? extractedDir = null)
     {
         try
         {
@@ -350,11 +363,11 @@ public class UpdateManager
             var currentDir = Path.GetDirectoryName(currentExe) ?? AppContext.BaseDirectory;
             var tempNewExe = Path.Combine(currentDir, "RVUCounter_new.exe");
 
-            Log.Information("Applying update: {New} -> {Current}", newExePath, currentExe);
+            Log.Information("Applying update: {New} -> {Current} (appDir: {Dir})", newExePath, currentExe, currentDir);
 
             // Step 1: Copy new exe to app directory with temp name
             File.Copy(newExePath, tempNewExe, overwrite: true);
-            Log.Debug("Copied new exe to: {Path}", tempNewExe);
+            Log.Information("Step 1: Copied new exe to: {Path}", tempNewExe);
 
             // Step 2: Delete old version if it exists from a previous failed update
             if (File.Exists(oldExe))
@@ -362,20 +375,29 @@ public class UpdateManager
                 try
                 {
                     File.Delete(oldExe);
+                    Log.Information("Step 2: Deleted existing old version file");
                 }
                 catch (Exception ex)
                 {
-                    Log.Warning(ex, "Could not delete existing old version file");
+                    Log.Warning(ex, "Step 2: Could not delete existing old version file, trying overwrite");
+                    // If we can't delete it, File.Move with overwrite won't work on older .NET
+                    // but we can still try - worst case step 3 fails and we catch it
                 }
             }
 
             // Step 3: Rename current exe to _old (Windows allows this even when running!)
-            File.Move(currentExe, oldExe);
-            Log.Debug("Renamed current exe to: {Path}", oldExe);
+            File.Move(currentExe, oldExe, overwrite: true);
+            Log.Information("Step 3: Renamed current exe to: {Path}", oldExe);
 
             // Step 4: Rename new exe to current
             File.Move(tempNewExe, currentExe);
-            Log.Debug("Renamed new exe to: {Path}", currentExe);
+            Log.Information("Step 4: Renamed new exe to: {Path}", currentExe);
+
+            // Step 5: Copy resources folder if present in extracted ZIP
+            if (extractedDir != null)
+            {
+                CopyResourcesFromExtracted(extractedDir, currentDir);
+            }
 
             Log.Information("Update applied successfully. Restart required.");
             return true;
@@ -384,6 +406,46 @@ public class UpdateManager
         {
             Log.Error(ex, "Failed to apply update");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Copy resources folder from extracted ZIP to application directory.
+    /// </summary>
+    private static void CopyResourcesFromExtracted(string extractedDir, string appDir)
+    {
+        try
+        {
+            // Look for resources folder in extracted content
+            var resourcesDirs = Directory.GetDirectories(extractedDir, "resources", SearchOption.AllDirectories);
+            if (resourcesDirs.Length == 0)
+            {
+                Log.Debug("No resources folder found in extracted update");
+                return;
+            }
+
+            var sourceResources = resourcesDirs[0];
+            var targetResources = Path.Combine(appDir, "resources");
+
+            // Create target resources folder if it doesn't exist
+            Directory.CreateDirectory(targetResources);
+
+            // Copy all files from source to target, overwriting existing
+            foreach (var file in Directory.GetFiles(sourceResources, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(sourceResources, file);
+                var targetFile = Path.Combine(targetResources, relativePath);
+                var targetDir = Path.GetDirectoryName(targetFile);
+                if (targetDir != null)
+                    Directory.CreateDirectory(targetDir);
+
+                File.Copy(file, targetFile, overwrite: true);
+                Log.Information("Updated resource: {File}", relativePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to copy resources from update (non-fatal)");
         }
     }
 

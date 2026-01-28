@@ -15,6 +15,22 @@ public static class MosaicExtractor
     private const string MosaicProcessName = "Mosaic.InfoHub";
 
     /// <summary>
+    /// Element info record capturing Name, Text, Index, ControlType, and ClassName.
+    /// ControlType and ClassName added for Mosaic 2.0.3 compatibility (e.g. accession
+    /// is now a Button control, status words appear as intermediate elements).
+    /// </summary>
+    private record MosaicElementInfo(string Name, string Text, int Index, ControlType? ControlType, string ClassName);
+
+    /// <summary>
+    /// Status words that Mosaic 2.0.3 inserts between the "Current Study" label and the
+    /// accession Button. These must be skipped during accession lookahead.
+    /// </summary>
+    private static readonly HashSet<string> StatusWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "DRAFTED", "UNDRAFTED", "SIGNED", "UNSIGNED", "PRELIMINARY", "FINAL"
+    };
+
+    /// <summary>
     /// Find the Mosaic Info Hub main window.
     /// </summary>
     public static AutomationElement? FindMosaicWindow()
@@ -58,17 +74,26 @@ public static class MosaicExtractor
 
             var result = new MosaicStudyData();
 
-            // Build element list with text
-            var elementData = new List<(string Name, string Text, int Index)>();
+            // Build element list with text, control type, and class name
+            var elementData = new List<MosaicElementInfo>();
             for (int i = 0; i < elements.Count; i++)
             {
                 try
                 {
                     var text = WindowExtraction.GetElementText(elements[i]) ?? "";
                     var name = WindowExtraction.GetElementName(elements[i]) ?? "";
+
+                    ControlType? controlType = null;
+                    try { controlType = elements[i].Properties.ControlType.ValueOrDefault; }
+                    catch { /* some elements don't expose ControlType */ }
+
+                    string className = "";
+                    try { className = elements[i].Properties.ClassName.ValueOrDefault ?? ""; }
+                    catch { /* some elements don't expose ClassName */ }
+
                     if (!string.IsNullOrWhiteSpace(text) || !string.IsNullOrWhiteSpace(name))
                     {
-                        elementData.Add((name.Trim(), text.Trim(), i));
+                        elementData.Add(new MosaicElementInfo(name.Trim(), text.Trim(), i, controlType, className));
                     }
                 }
                 catch (Exception ex) { Log.Debug("Skipping element {Index}: {Error}", i, ex.Message); }
@@ -82,7 +107,8 @@ public static class MosaicExtractor
 
             for (int i = 0; i < elementData.Count; i++)
             {
-                var (name, text, _) = elementData[i];
+                var name = elementData[i].Name;
+                var text = elementData[i].Text;
                 var combined = $"{name} {text}";
                 var combinedLower = combined.ToLowerInvariant();
                 var nameLower = name.ToLowerInvariant();
@@ -94,7 +120,16 @@ public static class MosaicExtractor
                     for (int j = i + 1; j < Math.Min(i + 15, elementData.Count); j++)
                     {
                         var nextName = elementData[j].Name;
-                        if (!string.IsNullOrEmpty(nextName) && !nextName.EndsWith(":") &&
+
+                        // Mosaic 2.0.3: skip empty elements between label and accession
+                        if (string.IsNullOrWhiteSpace(nextName))
+                            continue;
+
+                        // Mosaic 2.0.3: skip status words (DRAFTED, SIGNED, etc.)
+                        if (StatusWords.Contains(nextName.Trim()))
+                            continue;
+
+                        if (!nextName.EndsWith(":") &&
                             !nextName.ToLowerInvariant().Contains("mrn"))
                         {
                             var extracted = ExtractAccessionWithProcedure(nextName);
@@ -202,6 +237,21 @@ public static class MosaicExtractor
                         result.SiteCode = siteCode;
                         Log.Debug("Found site code: {SiteCode}", result.SiteCode);
                     }
+                    // Mosaic 2.0.3: label and value may be in separate elements
+                    else if (name.Trim().Equals("Site Code:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int j = i + 1; j < Math.Min(i + 4, elementData.Count); j++)
+                        {
+                            var nextName = elementData[j].Name.Trim();
+                            if (!string.IsNullOrWhiteSpace(nextName) &&
+                                Regex.IsMatch(nextName, @"^[A-Z]{2,5}$", RegexOptions.IgnoreCase))
+                            {
+                                result.SiteCode = nextName.ToUpperInvariant();
+                                Log.Debug("Found site code via label lookahead: {SiteCode}", result.SiteCode);
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 // --- MRN (memory only) ---
@@ -212,6 +262,21 @@ public static class MosaicExtractor
                     {
                         result.Mrn = mrn;
                         Log.Debug("Found MRN: {Mrn}", result.Mrn);
+                    }
+                    // Mosaic 2.0.3: label and value may be in separate elements
+                    else if (name.Trim().Equals("MRN:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int j = i + 1; j < Math.Min(i + 4, elementData.Count); j++)
+                        {
+                            var nextName = elementData[j].Name.Trim();
+                            if (!string.IsNullOrWhiteSpace(nextName) &&
+                                Regex.IsMatch(nextName, @"^[A-Z0-9]{5,20}$", RegexOptions.IgnoreCase))
+                            {
+                                result.Mrn = nextName.ToUpperInvariant();
+                                Log.Debug("Found MRN via label lookahead: {Mrn}", result.Mrn);
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -441,6 +506,21 @@ public static class MosaicExtractor
 
         return null;
     }
+
+    // -----------------------------------------------------------------------
+    // Mosaic 2.0.3 Report Content Extraction (DEFERRED — no consumers yet)
+    // -----------------------------------------------------------------------
+    // In 2.0.3, report text lives inside a ProseMirror editor (Document element
+    // named "Report for: <Accession>"). To extract it:
+    //   1. Find the Document element by name prefix "Report for:"
+    //   2. Collect all Text descendants (these are the report paragraphs)
+    //   3. Join with newlines, optionally score by keyword (FINDINGS, IMPRESSION, etc.)
+    // NOTE: In 2.0.2, the report Document was named "reportEditor" (or similar).
+    //       The name changed in 2.0.3 to "Report for: <Accession>".
+    // This does NOT affect current extraction logic — we find Mosaic by process
+    // name / window title, not by Document name. Implement when report content
+    // is needed by a feature (e.g., critical result detection from report text).
+    // -----------------------------------------------------------------------
 
     /// <summary>
     /// Get a list of all visible accessions in Mosaic (for tracking comparison).

@@ -1055,10 +1055,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     Log.Information("Update available: {Version}", updateInfo.Version);
 
-                    // Prompt user on UI thread
-                    await Application.Current.Dispatcher.InvokeAsync(async () =>
+                    // Prompt user on UI thread - get the result synchronously, then download on background
+                    var userChoice = await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
-                        var result = MessageBox.Show(
+                        return MessageBox.Show(
                             $"A new version is available: v{updateInfo.Version}\n\n" +
                             $"Release: {updateInfo.Name}\n" +
                             $"Size: {updateInfo.AssetSizeDisplay}\n\n" +
@@ -1067,22 +1067,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             "Update Available",
                             MessageBoxButton.YesNoCancel,
                             MessageBoxImage.Information);
+                    });
 
-                        if (result == MessageBoxResult.Yes)
+                    if (userChoice == MessageBoxResult.Yes)
+                    {
+                        if (string.IsNullOrEmpty(updateInfo.DownloadUrl))
                         {
-                            if (string.IsNullOrEmpty(updateInfo.DownloadUrl))
-                            {
-                                StatusMessage = "No download URL";
-                                UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
-                                return;
-                            }
+                            StatusMessage = "No download URL";
+                            UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
+                            return;
+                        }
 
-                            StatusMessage = "Downloading update...";
+                        StatusMessage = "Downloading update...";
 
-                            var success = await updateManager.DownloadAndApplyUpdateAsync(
-                                updateInfo.DownloadUrl);
+                        var success = await updateManager.DownloadAndApplyUpdateAsync(
+                            updateInfo.DownloadUrl);
 
-                            if (success)
+                        if (success)
+                        {
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
                             {
                                 MessageBox.Show(
                                     "Update downloaded successfully.\n\n" +
@@ -1090,30 +1093,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     "Update Ready",
                                     MessageBoxButton.OK,
                                     MessageBoxImage.Information);
+                            });
 
-                                UpdateManager.RestartApp();
-                            }
-                            else
+                            UpdateManager.RestartApp();
+                        }
+                        else
+                        {
+                            StatusMessage = "Update failed";
+                            await Application.Current.Dispatcher.InvokeAsync(() =>
                             {
-                                StatusMessage = "Update failed";
                                 MessageBox.Show(
                                     "Failed to download or apply the update.\n\n" +
                                     "You can download it manually from the releases page.",
                                     "Update Failed",
                                     MessageBoxButton.OK,
                                     MessageBoxImage.Warning);
-                                UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
-                            }
+                            });
+                            UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
                         }
-                        else if (result == MessageBoxResult.No)
-                        {
-                            // User chose to skip this version
-                            _dataManager.Settings.SkippedVersion = updateInfo.Version;
-                            _dataManager.SaveSettings();
-                            Log.Information("User skipped update {Version}", updateInfo.Version);
-                        }
-                        // Cancel = do nothing, will ask again next time
-                    });
+                    }
+                    else if (userChoice == MessageBoxResult.No)
+                    {
+                        // User chose to skip this version
+                        _dataManager.Settings.SkippedVersion = updateInfo.Version;
+                        _dataManager.SaveSettings();
+                        Log.Information("User skipped update {Version}", updateInfo.Version);
+                    }
+                    // Cancel = do nothing, will ask again next time
                 }
                 else
                 {
