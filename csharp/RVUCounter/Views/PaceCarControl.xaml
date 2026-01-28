@@ -61,26 +61,15 @@
         </Grid>
 
         <!-- Text line: Now: 4.3 | Prior: 12.3 at 11:49 pm | ▼ -8.0 behind -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="2,1,2,0">
-            <!-- Now: -->
-            <TextBlock Text="Now:" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
-            <!-- Current RVU value -->
-            <TextBlock Text="{Binding TotalRvu, StringFormat=' {0:F1}'}" FontSize="9" FontWeight="Bold"
-                       Foreground="#87CEEB" VerticalAlignment="Center"/>
-            <!-- Separator -->
-            <TextBlock Text=" | " FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
-            <!-- Prior: (or comparison label) -->
-            <TextBlock Text="{Binding PaceCompareLabel}" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
-            <!-- Prior RVU value -->
-            <TextBlock Text="{Binding TargetRvu, StringFormat=' {0:F1}'}" FontSize="9" FontWeight="Bold"
-                       Foreground="#9090C0" VerticalAlignment="Center"/>
-            <!-- at time -->
-            <TextBlock Text="{Binding PaceTimeText}" FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
-            <!-- Spacer -->
-            <TextBlock Text=" | " FontSize="9" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
-            <!-- Diff text (▼ -8.0 behind) -->
-            <TextBlock Text="{Binding PaceDiffText}" FontSize="9" FontWeight="Bold"
-                       Foreground="{Binding DiffColor}" VerticalAlignment="Center"/>
-        </StackPanel>
+        <TextBlock Grid.Row="1" FontSize="9" Margin="2,1,2,0" TextTrimming="CharacterEllipsis">
+            <Run Text="Now:" Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <Run Text="{Binding TotalRvu, StringFormat=' {0:F1}', Mode=OneWay}" FontWeight="Bold" Foreground="#87CEEB"/>
+            <Run Text=" | " Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <Run Text="{Binding PaceCompareLabel, Mode=OneWay}" Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <Run Text="{Binding TargetRvu, StringFormat=' {0:F1}', Mode=OneWay}" FontWeight="Bold" Foreground="#9090C0"/>
+            <Run Text="{Binding PaceTimeText, Mode=OneWay}" Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <Run Text=" | " Foreground="{DynamicResource SecondaryTextBrush}"/>
+            <Run Text="{Binding PaceDiffText, Mode=OneWay}" FontWeight="Bold" Foreground="{Binding DiffColor}"/>
+        </TextBlock>
     </Grid>
 </UserControl>

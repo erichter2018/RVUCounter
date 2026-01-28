@@ -23,6 +23,7 @@ public class UserSettings
     public bool StartMinimized { get; set; } = false;
     public bool DarkMode { get; set; } = true;   // Python default: true (dark mode)
     public bool ShowTime { get; set; } = true;   // Python default: true (show time)
+    public bool ShowInpatientStatPercentage { get; set; } = true;  // Show IP Stat % in stats panel
 
     // Global font size adjustment (-2.0 to +4.0 in 0.5 increments, 0 = default)
     public double GlobalFontSizeAdjustment { get; set; } = 0.0;
@@ -57,7 +58,7 @@ public class UserSettings
     public bool IgnoreDuplicateAccessions { get; set; } = true;
 
     // MosaicTools integration - wait for signed/unsigned confirmation
-    public bool MosaicToolsIntegrationEnabled { get; set; } = false;
+    public bool MosaicToolsIntegrationEnabled { get; set; } = true;
     public int MosaicToolsTimeoutSeconds { get; set; } = 5;
 
     // HIPAA compliance - always hash accessions

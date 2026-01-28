@@ -23,6 +23,17 @@
         <converters:NonDollarPartConverter x:Key="NonDollarPartConverter"/>
         <converters:TeamBarWidthConverter x:Key="TeamBarWidthConverter"/>
         <converters:PercentToWidthConverter x:Key="PercentToWidthConverter"/>
+        <converters:PositiveToVisibilityConverter x:Key="PositiveToVisibility"/>
+
+        <!-- Patient info converters (memory-only data) -->
+        <converters:PatientNameConverter x:Key="PatientNameConverter"/>
+        <converters:PatientNameVisibilityConverter x:Key="PatientNameVisibilityConverter"/>
+        <converters:SiteCodeConverter x:Key="SiteCodeConverter"/>
+        <converters:SiteCodeVisibilityConverter x:Key="SiteCodeVisibilityConverter"/>
+        <converters:NonEmptyToVisibilityConverter x:Key="NonEmptyToVisibility"/>
+        <converters:CriticalFilterBackgroundConverter x:Key="CriticalFilterBackgroundConverter"/>
+        <converters:CriticalFilterTextConverter x:Key="CriticalFilterTextConverter"/>
+        <converters:InpatientStatColorConverter x:Key="InpatientStatColorConverter"/>
 
         <!-- Global Font Sizes (can be adjusted via settings) -->
         <sys:Double x:Key="FontSizeXSmall">9</sys:Double>

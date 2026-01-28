@@ -534,7 +534,7 @@ public static class ClarioExtractor
     /// <summary>
     /// Combine Priority and Class into a single patient_class string (like Python's _combine_priority_and_class_clario).
     /// </summary>
-    private static string CombinePriorityAndClass(string? priorityValue, string? classValue)
+    public static string CombinePriorityAndClass(string? priorityValue, string? classValue)
     {
         priorityValue = priorityValue?.Trim() ?? "";
         classValue = classValue?.Trim() ?? "";

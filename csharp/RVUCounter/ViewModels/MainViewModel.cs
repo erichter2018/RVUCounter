@@ -7,6 +7,7 @@ using RVUCounter.Core;
 using RVUCounter.Data;
 using RVUCounter.Logic;
 using RVUCounter.Models;
+using RVUCounter.Services;
 using RVUCounter.Views;
 using Serilog;
 using System.Windows.Media;
@@ -26,6 +27,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _statsTimer;
     private readonly DispatcherTimer _fatigueTimer;
+    private readonly DispatcherTimer _backupTimer;
+    private readonly BackupManager _backupManager;
+
+    // Named pipe client for MosaicTools bridge (replaces double-scraping)
+    private MosaicToolsPipeClient? _pipeClient;
+    // Track last sent shift info to avoid redundant sends
+    private double _lastSentTotalRvu = -1;
+    private int _lastSentRecordCount = -1;
 
     /// <summary>
     /// Exposes DataManager for dialogs that need access to settings/database
@@ -143,6 +152,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _showTime = false;
 
+    // Inpatient Stat percentage tracking
+    [ObservableProperty]
+    private bool _showInpatientStatPercentage = true;
+
+    [ObservableProperty]
+    private double _inpatientStatPercentage;
+
+    [ObservableProperty]
+    private int _inpatientStatCount;
+
     // ===========================================
     // SHIFT STATE
     // ===========================================
@@ -188,6 +207,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _dataSourceIndicator = "detecting...";
 
+    // MosaicTools pipe connection state
+    [ObservableProperty]
+    private bool _isMosaicToolsPipeConnected;
+
+    [ObservableProperty]
+    private string _pipeStatusText = "MT";
+
+    [ObservableProperty]
+    private Brush _pipeStatusColor = Brushes.Gray;
+
+    public string PipeStatusTooltip => IsMosaicToolsPipeConnected
+        ? "Connected to MosaicTools pipe \u2014 using MT data instead of scraping"
+        : "MosaicTools pipe not connected \u2014 scraping Mosaic directly";
+
+    partial void OnIsMosaicToolsPipeConnectedChanged(bool value)
+    {
+        PipeStatusColor = value ? Brushes.LimeGreen : Brushes.Gray;
+        OnPropertyChanged(nameof(PipeStatusTooltip));
+    }
+
     // "already recorded" indicator - shows when current study is already in database
     [ObservableProperty]
     private bool _isCurrentStudyAlreadyRecorded;
@@ -197,6 +236,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private Brush _currentAccessionColor = Brushes.Gray;
+
+    // Patient name and site code for current study (memory only - not persisted)
+    [ObservableProperty]
+    private string _currentPatientName = "";
+
+    [ObservableProperty]
+    private string _currentSiteCode = "";
 
     // ===========================================
     // RECENT STUDIES
@@ -218,6 +264,60 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private List<StudyRecord> _temporaryStudies = new();
 
     // ===========================================
+    // CRITICAL RESULTS TRACKING (MosaicTools)
+    // ===========================================
+
+    // Track accessions with critical results (hashed accessions)
+    private readonly HashSet<string> _criticalStudies = new();
+    private readonly object _criticalStudiesLock = new();
+
+    [ObservableProperty]
+    private bool _showCriticalOnly;
+
+    [ObservableProperty]
+    private int _criticalResultsCount;
+
+    partial void OnShowCriticalOnlyChanged(bool value)
+    {
+        // Refresh the recent studies display when filter changes
+        UpdateRecentStudiesDisplay();
+        OnPropertyChanged(nameof(CriticalFilterTooltip));
+    }
+
+    /// <summary>
+    /// Tooltip for the critical filter button.
+    /// </summary>
+    public string CriticalFilterTooltip => ShowCriticalOnly
+        ? "Click to show all studies"
+        : "Click to show only critical results";
+
+    [RelayCommand]
+    private void ToggleCriticalFilter()
+    {
+        ShowCriticalOnly = !ShowCriticalOnly;
+    }
+
+    /// <summary>
+    /// Mark a study as having a critical result.
+    /// Called when MosaicTools sends a critical result message.
+    /// </summary>
+    private void MarkStudyAsCritical(string hashedAccession)
+    {
+        lock (_criticalStudiesLock)
+        {
+            _criticalStudies.Add(hashedAccession);
+        }
+        UpdateCriticalResultsCount();
+    }
+
+    private void UpdateCriticalResultsCount()
+    {
+        // Count critical results in current recent studies
+        var count = RecentStudies.Count(s => s.HasCriticalResult);
+        CriticalResultsCount = count;
+    }
+
+    // ===========================================
     // UNDO/REDO (Python parity - single level)
     // ===========================================
 
@@ -236,6 +336,108 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly object _clarioCacheLock = new();
     private string _lastClarioAccession = "";
 
+    // ===========================================
+    // PATIENT INFO CACHE (Memory Only - Privacy)
+    // ===========================================
+    // These are stored in memory only and never persisted to the database.
+    // Key: hashed accession, Value: patient info
+    private readonly Dictionary<string, string> _patientNameCache = new();
+    private readonly Dictionary<string, string> _siteCodeCache = new();
+    private readonly Dictionary<string, string> _originalAccessionCache = new();
+    private readonly Dictionary<string, string> _mrnCache = new();
+    private readonly object _patientInfoCacheLock = new();
+
+    /// <summary>
+    /// Get patient name for a study record (memory only lookup).
+    /// Returns null if not found in cache.
+    /// </summary>
+    public string? GetPatientName(string hashedAccession)
+    {
+        lock (_patientInfoCacheLock)
+        {
+            return _patientNameCache.TryGetValue(hashedAccession, out var name) ? name : null;
+        }
+    }
+
+    /// <summary>
+    /// Get site code for a study record (memory only lookup).
+    /// Returns null if not found in cache.
+    /// </summary>
+    public string? GetSiteCode(string hashedAccession)
+    {
+        lock (_patientInfoCacheLock)
+        {
+            return _siteCodeCache.TryGetValue(hashedAccession, out var site) ? site : null;
+        }
+    }
+
+    /// <summary>
+    /// Get original (unhashed) accession for a study record (memory only lookup).
+    /// Returns null if not found in cache. Used for Clario integration.
+    /// </summary>
+    public string? GetOriginalAccession(string hashedAccession)
+    {
+        lock (_patientInfoCacheLock)
+        {
+            return _originalAccessionCache.TryGetValue(hashedAccession, out var accession) ? accession : null;
+        }
+    }
+
+    /// <summary>
+    /// Get MRN (Medical Record Number) for a study record (memory only lookup).
+    /// Returns null if not found in cache. Used for Clario integration via XML file drop.
+    /// </summary>
+    public string? GetMrn(string hashedAccession)
+    {
+        lock (_patientInfoCacheLock)
+        {
+            return _mrnCache.TryGetValue(hashedAccession, out var mrn) ? mrn : null;
+        }
+    }
+
+    /// <summary>
+    /// Get formatted tooltip text for a study record.
+    /// Includes patient name and site if available in memory cache.
+    /// </summary>
+    public string GetStudyTooltip(StudyRecord study)
+    {
+        var parts = new List<string>();
+
+        // Patient name (if available)
+        var patientName = GetPatientName(study.Accession);
+        if (!string.IsNullOrEmpty(patientName))
+        {
+            parts.Add($"Patient: {patientName}");
+        }
+
+        // Site code (if available)
+        var siteCode = GetSiteCode(study.Accession);
+        if (!string.IsNullOrEmpty(siteCode))
+        {
+            parts.Add($"Site: {siteCode}");
+        }
+
+        // Study details
+        parts.Add($"Procedure: {study.Procedure}");
+        parts.Add($"Study Type: {study.StudyType}");
+        parts.Add($"RVU: {study.Rvu:F1}");
+        parts.Add($"Patient Class: {study.PatientClass}");
+        parts.Add($"Time: {study.Timestamp:h:mm tt}");
+
+        if (study.DurationSeconds.HasValue)
+        {
+            var duration = TimeSpan.FromSeconds(study.DurationSeconds.Value);
+            parts.Add($"Duration: {(int)duration.TotalMinutes}m {duration.Seconds}s");
+        }
+
+        if (study.HasCriticalResult)
+        {
+            parts.Add("Critical Result: Yes");
+        }
+
+        return string.Join("\n", parts);
+    }
+
     // MosaicTools integration - pending studies waiting for signed/unsigned confirmation
     private readonly Dictionary<string, PendingStudy> _pendingStudies = new();
     private readonly object _pendingStudiesLock = new();
@@ -244,7 +446,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // Pre-emptive messages - received before we detected the study completing
     // Key: raw accession, Value: timestamp when received (for cleanup)
     private readonly Dictionary<string, DateTime> _preEmptiveUnsigned = new();
-    private readonly Dictionary<string, DateTime> _preEmptiveSigned = new();
+    // Pre-emptive signed: stores (timestamp, hasCritical)
+    private readonly Dictionary<string, (DateTime Time, bool HasCritical)> _preEmptiveSigned = new();
     private readonly object _preEmptiveUnsignedLock = new();
     private readonly object _preEmptiveSignedLock = new();
 
@@ -517,7 +720,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 RvuPerHour = AvgPerHour,
                 ShiftDurationMins = _shiftStart.HasValue
                     ? (int)(DateTime.Now - _shiftStart.Value).TotalMinutes
-                    : 0
+                    : 0,
+                InpatientStatPct = InpatientStatPercentage
             };
 
             // Update our stats
@@ -681,6 +885,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Show time in recent studies
         ShowTime = _dataManager.Settings.ShowTime;
 
+        // Show inpatient stat percentage
+        ShowInpatientStatPercentage = _dataManager.Settings.ShowInpatientStatPercentage;
+
         // Setup refresh timer (checks for new studies)
         _refreshTimer = new DispatcherTimer
         {
@@ -701,6 +908,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Interval = TimeSpan.FromMinutes(5)
         };
         _fatigueTimer.Tick += OnFatigueTick;
+
+        // Setup backup manager and timer (checks hourly/daily schedules)
+        _backupManager = new BackupManager(
+            _dataManager.DatabasePath,
+            () => _dataManager.Settings,
+            s => _dataManager.SaveSettings(),
+            () => _dataManager.Database.Checkpoint());
+        _backupTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMinutes(15) // Check every 15 minutes for scheduled backups
+        };
+        _backupTimer.Tick += OnBackupTick;
+        _backupTimer.Start(); // Always running to check schedule
 
         // Check for existing shift and resume
         LoadCurrentShift();
@@ -942,6 +1162,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Show time in recent studies
         ShowTime = settings.ShowTime;
 
+        // Show inpatient stat percentage
+        ShowInpatientStatPercentage = settings.ShowInpatientStatPercentage;
+
         // Compensation is always available with hardcoded rates
         ShowCompensation = true;
 
@@ -1055,6 +1278,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TotalCompensation = records.Sum(r => CalculateStudyCompensation(r));
         StudyCount = records.Count;
 
+        // Calculate inpatient stat percentage
+        // PatientClass from Clario contains combined priority+class: e.g., "Stat inpatient"
+        InpatientStatCount = records.Count(r =>
+            r.PatientClass.Contains("Stat inpatient", StringComparison.OrdinalIgnoreCase));
+        InpatientStatPercentage = records.Count > 0
+            ? (InpatientStatCount * 100.0 / records.Count)
+            : 0;
+
         // Hours elapsed
         var hoursElapsed = (currentTime - _shiftStart.Value).TotalHours;
 
@@ -1122,10 +1353,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         UpdatePaceCar(hoursElapsed);
 
+        // Update critical results count
+        CriticalResultsCount = records.Count(r => r.HasCriticalResult);
+
         // Update recent studies list (newest first, no limit - show all shift studies)
         var previousCount = RecentStudies.Count;
         RecentStudies.Clear();
-        foreach (var record in records.OrderByDescending(r => r.Timestamp))
+
+        // Apply critical filter if enabled
+        var displayRecords = ShowCriticalOnly
+            ? records.Where(r => r.HasCriticalResult)
+            : records;
+
+        foreach (var record in displayRecords.OrderByDescending(r => r.Timestamp))
         {
             RecentStudies.Add(record);
         }
@@ -1137,8 +1377,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         // Update label for active shift
-        RecentStudiesLabel = "Recent Studies";
-        RecentStudiesLabelColor = Application.Current.TryFindResource("SecondaryTextBrush") as Brush ?? Brushes.Gray;
+        RecentStudiesLabel = ShowCriticalOnly ? "Critical Results Only" : "Recent Studies";
+        RecentStudiesLabelColor = ShowCriticalOnly
+            ? Brushes.OrangeRed
+            : Application.Current.TryFindResource("SecondaryTextBrush") as Brush ?? Brushes.Gray;
+
+        // Send shift info to MosaicTools via pipe (if connected and values changed)
+        SendShiftInfoToPipe();
     }
 
     private string FormatHourLabel(DateTime dt)
@@ -1361,6 +1606,141 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _dataManager.Settings.Role);
     }
 
+    // ===========================================
+    // MOSAICTOOLS PIPE CLIENT
+    // ===========================================
+
+    /// <summary>
+    /// Initialize and start the named pipe client for MosaicTools bridge.
+    /// Called from MainWindow.Loaded.
+    /// </summary>
+    public void StartPipeClient()
+    {
+        if (_pipeClient != null) return;
+        _pipeClient = new MosaicToolsPipeClient();
+
+        _pipeClient.StudyEventReceived += OnPipeStudyEvent;
+        _pipeClient.ConnectionStateChanged += OnPipeConnectionChanged;
+
+        _pipeClient.Start();
+    }
+
+    /// <summary>
+    /// Stop the pipe client. Called from MainWindow.Closing.
+    /// </summary>
+    public void StopPipeClient()
+    {
+        if (_pipeClient == null) return;
+        _pipeClient.StudyEventReceived -= OnPipeStudyEvent;
+        _pipeClient.ConnectionStateChanged -= OnPipeConnectionChanged;
+        _pipeClient.Dispose();
+        _pipeClient = null;
+    }
+
+    private void OnPipeConnectionChanged(bool connected)
+    {
+        // Marshal to UI thread
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            IsMosaicToolsPipeConnected = connected;
+            if (connected)
+            {
+                Log.Information("MosaicTools pipe connected - will use pipe data instead of scraping");
+                // Send current shift info immediately on connect
+                SendShiftInfoToPipe();
+            }
+            else
+            {
+                Log.Information("MosaicTools pipe disconnected - falling back to own scraping");
+            }
+        });
+    }
+
+    private void OnPipeStudyEvent(PipeStudyEvent evt)
+    {
+        // Marshal to UI thread — these call into HandleMosaicToolsSigned/Unsigned
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            switch (evt.EventType)
+            {
+                case "signed":
+                    HandleMosaicToolsSignedStudy(evt.Accession, evt.HasCritical);
+                    break;
+                case "unsigned":
+                    HandleMosaicToolsUnsignedStudy(evt.Accession, evt.HasCritical);
+                    break;
+                default:
+                    Log.Warning("Unknown pipe study event type: {EventType}", evt.EventType);
+                    break;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Build a ScanResult from pipe study data (no scraping needed).
+    /// </summary>
+    private ScanResult? BuildScanResultFromPipe()
+    {
+        var pipeData = _pipeClient?.LatestStudyData;
+        if (pipeData == null) return null;
+
+        // Build patient class from Clario priority + class (e.g., "STAT" + "IP" → "Stat Inpatient")
+        var patientClass = BuildPatientClassFromClario(pipeData.ClarioPriority, pipeData.ClarioClass);
+
+        // Convert pipe data into MosaicStudyData
+        var studyData = new Utils.MosaicStudyData
+        {
+            Accession = pipeData.Accession,
+            Procedure = pipeData.Description,  // MT sends "description" for procedure text
+            PatientClass = patientClass,
+            PatientName = pipeData.PatientName,
+            SiteCode = pipeData.SiteCode,
+            Mrn = pipeData.Mrn
+        };
+
+        return new ScanResult(
+            IsMosaicRunning: true,
+            IsClarioRunning: false,
+            CurrentAccession: pipeData.Accession,
+            StudyData: !string.IsNullOrEmpty(pipeData.Accession) ? studyData : null,
+            ClarioData: null);
+    }
+
+    /// <summary>
+    /// Build normalized patient class from Clario priority and class fields.
+    /// Delegates to ClarioExtractor.CombinePriorityAndClass which already handles
+    /// ED/ER→Emergency normalization, urgency/location splitting, and deduplication.
+    /// </summary>
+    private static string BuildPatientClassFromClario(string? priority, string? clarioClass)
+    {
+        var result = Utils.ClarioExtractor.CombinePriorityAndClass(priority, clarioClass);
+        return !string.IsNullOrEmpty(result) ? result : "Unknown";
+    }
+
+    /// <summary>
+    /// Send current shift info to MosaicTools via pipe (if connected and values changed).
+    /// </summary>
+    private void SendShiftInfoToPipe()
+    {
+        if (_pipeClient == null || !_pipeClient.IsConnected) return;
+
+        var totalRvu = TotalRvu;
+        var recordCount = StudyCount;
+
+        // Only send if values changed
+        if (totalRvu == _lastSentTotalRvu && recordCount == _lastSentRecordCount)
+            return;
+
+        _lastSentTotalRvu = totalRvu;
+        _lastSentRecordCount = recordCount;
+
+        _pipeClient.SendShiftInfo(
+            totalRvu,
+            recordCount,
+            _shiftStart?.ToString("o"),
+            IsShiftActive);
+    }
+
     private bool _isScanning = false;
 
     private async void OnRefreshTick(object? sender, EventArgs e)
@@ -1371,13 +1751,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            // Run UI automation on background thread to avoid blocking UI
+            // When MosaicTools pipe is connected, use pipe data instead of scraping
+            if (_pipeClient != null && _pipeClient.IsConnected)
+            {
+                var pipeResult = BuildScanResultFromPipe();
+                if (pipeResult != null)
+                {
+                    ApplyScanResults(pipeResult);
+                    // Override after ApplyScanResults (which sets "Mosaic")
+                    DataSourceIndicator = "MT Pipe";
+                    // No Clario enrichment needed — pipe data already includes patient class
+                    return;
+                }
+                // Pipe connected but no data yet — fall through to own scraping
+            }
+
+            // Fallback: Run Mosaic extraction on background thread
             var result = await Task.Run(() => PerformMosaicScan());
-            
-            // Apply results on UI thread
+
+            // Apply Mosaic results on UI thread (no Clario delay)
             if (result != null)
             {
                 ApplyScanResults(result);
+            }
+            else
+            {
+                // Extraction failed entirely - still let tracker count misses
+                // so studies can complete via the grace period mechanism
+                var completedStudies = _studyTracker.CheckCompleted(DateTime.Now, "");
+                if (completedStudies.Count > 0)
+                    ProcessCompletedStudies(completedStudies);
+            }
+
+            // Fire-and-forget: Clario patient class enrichment runs separately
+            // so it never blocks the current study display
+            var accession = result?.CurrentAccession;
+            if (!string.IsNullOrEmpty(accession) && result?.IsMosaicRunning == true)
+            {
+                _ = Task.Run(() => PerformClarioEnrichment(accession));
             }
         }
         catch (Exception ex)
@@ -1402,25 +1813,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private ScanResult PerformMosaicScan()
     {
-        // This runs on background thread
+        // This runs on background thread — Mosaic only, no Clario (Clario runs separately)
         if (Utils.MosaicExtractor.IsMosaicRunning())
         {
             var studyData = Utils.MosaicExtractor.ExtractStudyData();
             var currentAccession = studyData?.Accession;
-
-            // Also query Clario for patient class if it's running and we have an accession
-            Utils.ClarioPatientClassData? clarioData = null;
-            var isClarioRunning = Utils.ClarioExtractor.IsClarioRunning();
-
-            if (!string.IsNullOrEmpty(currentAccession) && isClarioRunning)
-            {
-                // Query Clario for patient class - must match accession
-                clarioData = Utils.ClarioExtractor.ExtractPatientClass(targetAccession: currentAccession);
-                Log.Debug("Clario extraction for {Accession}: {Result}",
-                    currentAccession, clarioData?.PatientClass ?? "null");
-            }
-
-            return new ScanResult(true, isClarioRunning, currentAccession, studyData, clarioData);
+            return new ScanResult(true, false, currentAccession, studyData, null);
         }
         else if (Utils.ClarioExtractor.IsClarioRunning())
         {
@@ -1428,6 +1826,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         return new ScanResult(false, false, null, null, null);
+    }
+
+    /// <summary>
+    /// Runs Clario patient class extraction on a background thread, then applies
+    /// the result on the UI thread. Separated from PerformMosaicScan so Mosaic
+    /// results display immediately without waiting for Clario's slower extraction.
+    /// </summary>
+    private void PerformClarioEnrichment(string accession)
+    {
+        try
+        {
+            if (!Utils.ClarioExtractor.IsClarioRunning())
+                return;
+
+            var clarioData = Utils.ClarioExtractor.ExtractPatientClass(targetAccession: accession);
+            if (clarioData == null || string.IsNullOrEmpty(clarioData.PatientClass))
+                return;
+
+            Log.Debug("Clario enrichment for {Accession}: {PatientClass}",
+                accession, clarioData.PatientClass);
+
+            // Cache the result (thread-safe)
+            lock (_clarioCacheLock)
+            {
+                _clarioPatientClassCache[accession] = clarioData.PatientClass;
+                _lastClarioAccession = clarioData.Accession;
+            }
+
+            // Update UI on dispatcher thread if this accession is still current
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (CurrentAccession == accession)
+                {
+                    CurrentPatientClass = clarioData.PatientClass;
+                    Log.Information("Clario enriched current study: {PatientClass} for {Accession}",
+                        clarioData.PatientClass, accession);
+                }
+
+                // Only update tracker if study is still active (not completed)
+                if (_studyTracker.IsTracking(accession))
+                {
+                    var tracked = _studyTracker.GetStudy(accession);
+                    if (tracked != null)
+                    {
+                        tracked.PatientClass = clarioData.PatientClass;
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Clario enrichment failed for {Accession}", accession);
+        }
     }
 
     // Invalid procedure values that indicate "no study" (matches Python)
@@ -1444,32 +1895,46 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var currentAccession = result.CurrentAccession ?? "";
             var currentProcedure = studyData?.Procedure ?? "";
             var currentPatientClass = studyData?.PatientClass ?? "Unknown";
+            var currentPatientName = studyData?.PatientName;
+            var currentSiteCode = studyData?.SiteCode;
             var currentTime = DateTime.Now;
 
-            // CLARIO PATIENT CLASS OVERRIDE (like Python)
-            // If Clario returned patient class, use it and cache it
-            if (result.ClarioData != null && !string.IsNullOrEmpty(result.ClarioData.PatientClass))
+            // Store patient name, site code, MRN, and original accession in memory (never persisted to DB)
+            if (!string.IsNullOrEmpty(currentAccession))
             {
-                currentPatientClass = result.ClarioData.PatientClass;
-                Log.Information("Clario patient class OVERRIDES: {PatientClass} for {Accession}",
-                    currentPatientClass, currentAccession);
-
-                // Cache by accession
-                lock (_clarioCacheLock)
+                var hashedAccession = _dataManager.HashAccession(currentAccession);
+                var currentMrn = studyData?.Mrn;
+                lock (_patientInfoCacheLock)
                 {
-                    _clarioPatientClassCache[currentAccession] = currentPatientClass;
-                    _lastClarioAccession = result.ClarioData.Accession;
+                    // Store original accession for Clario lookup
+                    _originalAccessionCache[hashedAccession] = currentAccession;
+
+                    if (!string.IsNullOrEmpty(currentPatientName))
+                    {
+                        _patientNameCache[hashedAccession] = currentPatientName;
+                    }
+                    if (!string.IsNullOrEmpty(currentSiteCode))
+                    {
+                        _siteCodeCache[hashedAccession] = currentSiteCode;
+                    }
+                    if (!string.IsNullOrEmpty(currentMrn))
+                    {
+                        _mrnCache[hashedAccession] = currentMrn;
+                    }
                 }
             }
-            // Check cache if Mosaic returned "Unknown" (like Python enrichment)
-            else if (currentPatientClass == "Unknown" && !string.IsNullOrEmpty(currentAccession))
+
+            // Clario patient class enrichment runs asynchronously (PerformClarioEnrichment).
+            // Check the cache here in case Clario already enriched this accession on a prior cycle.
+            if ((currentPatientClass == "Unknown" || string.IsNullOrEmpty(currentPatientClass)) &&
+                !string.IsNullOrEmpty(currentAccession))
             {
                 lock (_clarioCacheLock)
                 {
                     if (_clarioPatientClassCache.TryGetValue(currentAccession, out var cachedClass))
                     {
                         currentPatientClass = cachedClass;
-                        Log.Debug("Enriched patient class from cache: {PatientClass}", currentPatientClass);
+                        Log.Debug("Enriched patient class from Clario cache: {PatientClass}", currentPatientClass);
                     }
                 }
             }
@@ -1558,10 +2023,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             var existing = _dataManager.Database.FindRecordByAccession(currentShift.Id, record.Accession);
                             if (existing == null)
                             {
-                                _dataManager.Database.AddRecord(currentShift.Id, record);
-                                _studyTracker.MarkSeen(maStudy.Accession);
-                                Log.Information("Multi-accession record added: {Accession} -> {StudyType} ({Rvu} RVU), duration={Duration:F1}s",
-                                    maStudy.Accession, maStudy.StudyType, maStudy.Rvu, durationPerStudy);
+                                try
+                                {
+                                    _dataManager.Database.AddRecord(currentShift.Id, record);
+                                    _studyTracker.MarkSeen(maStudy.Accession);
+                                    Log.Information("Multi-accession record added: {Accession} -> {StudyType} ({Rvu} RVU), duration={Duration:F1}s",
+                                        maStudy.Accession, maStudy.StudyType, maStudy.Rvu, durationPerStudy);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Error(ex, "Failed to add multi-accession record for {Accession} - study will be retried", maStudy.Accession);
+                                }
                             }
                         }
                         else if (!IsShiftActive)
@@ -1580,7 +2052,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
-                    Log.Debug("Multi-accession studies ignored - duration too short ({Duration:F1}s < {Min}s)",
+                    Log.Information("Dropped multi-accession studies - duration too short ({Duration:F1}s < {Min}s threshold)",
                         durationPerStudy, _dataManager.Settings.MinStudySeconds);
                 }
 
@@ -1591,6 +2063,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _multiAccessionData.Clear();
 
                 // Don't continue normal processing - multi-accession handled separately
+                _lastSeenAccession = "";  // Reset so next single-accession scan starts clean
                 UpdateRecentStudiesDisplay();
                 return;
             }
@@ -1627,7 +2100,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentStudyType = "Multiple";
                 CurrentStudyRvu = _multiAccessionData.Sum(m => m.Value.Rvu);
                 CurrentDuration = _multiAccessionStartTime != null
-                    ? $"({(currentTime - _multiAccessionStartTime.Value).TotalSeconds:F0}s)"
+                    ? $"({FormatDuration((currentTime - _multiAccessionStartTime.Value).TotalSeconds)})"
                     : "";
                 IsCurrentStudyAlreadyRecorded = false;
                 CurrentAccessionDisplay = $"Multi: {allAccessions.Count}";
@@ -1724,19 +2197,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     else
                     {
                         // Direct add to database (original behavior)
-                        _dataManager.Database.AddRecord(shift.Id, record);
-                        _studyTracker.MarkSeen(completed.Accession);
+                        try
+                        {
+                            _dataManager.Database.AddRecord(shift.Id, record);
+                            _studyTracker.MarkSeen(completed.Accession);
 
-                        // Record for fatigue detection
-                        if (completed.Duration > 0)
-                            _fatigueDetector.RecordStudy(DateTime.Now, completed.Duration);
+                            // Record for fatigue detection
+                            if (completed.Duration > 0)
+                                _fatigueDetector.RecordStudy(DateTime.Now, completed.Duration);
 
-                        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
-                            StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
-                        Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU), Duration: {Duration:F1}s",
-                            completed.Accession, studyType, rvu, completed.Duration);
+                            if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                                StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
+                            Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU), Duration: {Duration:F1}s",
+                                completed.Accession, studyType, rvu, completed.Duration);
 
-                        CalculateAndUpdateStats();
+                            CalculateAndUpdateStats();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to add record for {Accession} - study will be retried", completed.Accession);
+                        }
                     }
                 }
                 else
@@ -1768,6 +2248,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentAccession = currentAccession;
                 CurrentProcedure = !string.IsNullOrEmpty(currentProcedure) ? currentProcedure : "-";
                 CurrentPatientClass = currentPatientClass;
+                CurrentPatientName = currentPatientName ?? "";
+                CurrentSiteCode = currentSiteCode ?? "";
 
                 // Check if study is already recorded (like Python's "already recorded" display)
                 // Using 'shift' from STEP 2 above
@@ -1790,13 +2272,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentStudyType = studyType;
                 CurrentStudyRvu = rvu;
 
-                // STEP 4: Add/update current study in tracker (Python-like logic)
-                // Only add if procedure is valid (not "n/a" or similar)
+                // STEP 4: Add/update current study in tracker
+                // Always add when we have a valid accession, even with empty procedure.
+                // The tracker's AddStudy() handles updating procedure on subsequent cycles.
+                // Only skip when procedure is explicitly N/A (which triggers completion above).
                 if (!isProcedureNA)
                 {
                     _studyTracker.AddStudy(
                         currentAccession,
-                        currentProcedure,
+                        currentProcedure,  // may be empty - tracker handles updates later
                         currentTime,
                         _dataManager.RvuTable,
                         _dataManager.ClassificationRules,
@@ -1806,7 +2290,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var trackedStudy = _studyTracker.GetStudy(currentAccession);
                     if (trackedStudy != null)
                     {
-                        CurrentDuration = $"({trackedStudy.TrackedSeconds:F0}s)";
+                        CurrentDuration = $"({FormatDuration(trackedStudy.TrackedSeconds)})";
                     }
                     else
                     {
@@ -1844,6 +2328,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ProcessCompletedStudies(completedStudies);
             _lastSeenAccession = "";
         }
+    }
+
+    /// <summary>
+    /// Formats seconds as "Xm Xs" or "Xs" (matches Python / DurationConverter).
+    /// </summary>
+    private static string FormatDuration(double totalSeconds)
+    {
+        var secs = (int)totalSeconds;
+        if (secs < 60)
+            return $"{secs}s";
+        return $"{secs / 60}m {secs % 60}s";
     }
 
     /// <summary>
@@ -1921,14 +2416,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 else
                 {
                     // Direct add to database (original behavior)
-                    _dataManager.Database.AddRecord(shift.Id, record);
-                    _studyTracker.MarkSeen(completed.Accession);
-                    if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
-                        StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
-                    Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU)",
-                        completed.Accession, studyType, rvu);
+                    try
+                    {
+                        _dataManager.Database.AddRecord(shift.Id, record);
+                        _studyTracker.MarkSeen(completed.Accession);
+                        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                            StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
+                        Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU)",
+                            completed.Accession, studyType, rvu);
 
-                    CalculateAndUpdateStats();
+                        CalculateAndUpdateStats();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Failed to add record for {Accession} - study will be retried", completed.Accession);
+                    }
                 }
             }
             else
@@ -1963,6 +2465,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CurrentAccessionColor = Brushes.Gray;
         CurrentProcedure = "-";
         CurrentPatientClass = "-";
+        CurrentPatientName = "";
+        CurrentSiteCode = "";
         CurrentStudyType = "-";
         CurrentStudyRvu = 0;
         CurrentDuration = "";
@@ -1977,22 +2481,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (IsShiftActive)
         {
             // Active shift - show normal label with gray color
-            RecentStudiesLabel = "Recent Studies";
-            RecentStudiesLabelColor = Application.Current.TryFindResource("SecondaryTextBrush") as Brush ?? Brushes.Gray;
-
             // Recent studies come from the database in CalculateAndUpdateStats
+            // which already handles critical filter and updates the label
+            CalculateAndUpdateStats();
         }
         else
         {
+            // Update critical results count for temporary studies
+            CriticalResultsCount = _temporaryStudies.Count(s => s.HasCriticalResult);
+
             // No active shift - show temp studies with red warning
             if (_temporaryStudies.Count > 0)
             {
-                RecentStudiesLabel = "Temporary - No shift started";
-                RecentStudiesLabelColor = Brushes.Red;
+                RecentStudiesLabel = ShowCriticalOnly ? "Critical (Temp)" : "Temporary";
+                RecentStudiesLabelColor = ShowCriticalOnly ? Brushes.OrangeRed : Brushes.Red;
+
+                // Apply critical filter for temp studies
+                var displayStudies = ShowCriticalOnly
+                    ? _temporaryStudies.Where(s => s.HasCriticalResult)
+                    : _temporaryStudies;
 
                 // Show temp studies in the recent list (no limit)
                 RecentStudies.Clear();
-                foreach (var record in _temporaryStudies.OrderByDescending(r => r.Timestamp))
+                foreach (var record in displayStudies.OrderByDescending(r => r.Timestamp))
                 {
                     RecentStudies.Add(record);
                 }
@@ -2004,6 +2515,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 RecentStudiesLabelColor = Application.Current.TryFindResource("SecondaryTextBrush") as Brush ?? Brushes.Gray;
                 RecentStudies.Clear();
                 StudyCount = 0;
+                CriticalResultsCount = 0;
             }
         }
     }
@@ -2057,6 +2569,64 @@ public partial class MainViewModel : ObservableObject, IDisposable
             FatigueWarningMessage = analysis.AlertMessage;
             ShowFatigueWarning = true;
             Log.Information("Fatigue warning displayed: {Message}", analysis.AlertMessage);
+        }
+    }
+
+    private async void OnBackupTick(object? sender, EventArgs e)
+    {
+        // Check if scheduled backup is due (hourly/daily)
+        if (_backupManager.ShouldBackupNow(_dataManager.Settings))
+        {
+            Log.Information("Scheduled backup triggered");
+            try
+            {
+                var result = await _backupManager.CreateBackupAsync("scheduled");
+                if (result.Success)
+                {
+                    Log.Information("Scheduled backup completed: {Message}", result.Message);
+                }
+                else
+                {
+                    Log.Warning("Scheduled backup failed: {Message}", result.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Scheduled backup error");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Trigger backup on shift end (if cloud backup enabled with shift_end schedule).
+    /// </summary>
+    private async Task TriggerShiftEndBackupAsync()
+    {
+        var settings = _dataManager.Settings;
+        if (!settings.CloudBackupEnabled)
+            return;
+
+        var schedule = settings.BackupSchedule?.ToLowerInvariant() ?? "shift_end";
+        if (schedule != "shift_end")
+            return;
+
+        Log.Information("Triggering shift-end backup");
+        try
+        {
+            var result = await _backupManager.CreateBackupAsync("shift_end");
+            if (result.Success)
+            {
+                Log.Information("Shift-end backup completed: {Message}", result.Message);
+                StatusMessage = "Backup saved";
+            }
+            else
+            {
+                Log.Warning("Shift-end backup failed: {Message}", result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Shift-end backup error");
         }
     }
 
@@ -2136,7 +2706,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 foreach (var tempStudy in _temporaryStudies)
                 {
-                    _dataManager.Database.AddRecord(shift.Id, tempStudy);
+                    try
+                    {
+                        _dataManager.Database.AddRecord(shift.Id, tempStudy);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Failed to add temporary study {Accession} to new shift", tempStudy.Accession);
+                    }
                 }
                 Log.Information("Added {Count} temporary studies to new shift", _temporaryStudies.Count);
             }
@@ -2161,7 +2738,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void EndShift()
+    private async Task EndShiftAsync()
     {
         if (!IsShiftActive) return;
 
@@ -2182,6 +2759,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         UpdateRecentStudiesDisplay();
         StatusMessage = "Shift ended";
         Log.Information("Shift ended");
+
+        // Trigger backup after shift ends (if enabled)
+        await TriggerShiftEndBackupAsync();
     }
 
     [RelayCommand]
@@ -2257,13 +2837,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (study == null) return;
 
+        // Show confirmation dialog
+        var result = System.Windows.MessageBox.Show(
+            $"Delete this study?\n\n{study.Procedure}\n{study.Rvu:F1} RVU",
+            "Confirm Delete",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Question);
+
+        if (result != System.Windows.MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         // Check if this is a temporary study (not in database)
         var tempStudy = _temporaryStudies.FirstOrDefault(s =>
             s.Accession == study.Accession && s.Timestamp == study.Timestamp);
 
         if (tempStudy != null)
         {
-            // Remove from temporary studies list - no confirmation needed
+            // Remove from temporary studies list
             _temporaryStudies.Remove(tempStudy);
             RecentStudies.Remove(study);
             StudyCount = _temporaryStudies.Count;
@@ -2273,7 +2865,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else if (study.Id > 0)
         {
-            // Database study - delete directly without confirmation
+            // Database study - delete from database
             _dataManager.Database.DeleteRecord(study.Id);
             CalculateAndUpdateStats();
             StatusMessage = "Study deleted";
@@ -2287,37 +2879,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    // ===========================================
-    // STUDY DETAILS POPUP
-    // ===========================================
-
-    [ObservableProperty]
-    private bool _isStudyDetailsVisible;
-
-    [ObservableProperty]
-    private StudyRecord? _selectedStudyForDetails;
-
-    [RelayCommand]
-    private void ShowStudyDetails(StudyRecord? study)
-    {
-        if (study == null) return;
-        SelectedStudyForDetails = study;
-        IsStudyDetailsVisible = true;
-    }
-
-    [RelayCommand]
-    private void CloseStudyDetails()
-    {
-        IsStudyDetailsVisible = false;
-        SelectedStudyForDetails = null;
-    }
-
     // Event to notify UI to scroll to top when new study is added
     public event EventHandler? ScrollToTopRequested;
 
     private void RequestScrollToTop()
     {
         ScrollToTopRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private async Task OpenInClario(StudyRecord? study)
+    {
+        Log.Debug("OpenInClario called with study: {Study}", study?.Procedure ?? "null");
+
+        if (study == null) return;
+
+        // Get the original (unhashed) accession from memory cache
+        var originalAccession = GetOriginalAccession(study.Accession);
+        Log.Debug("OpenInClario: hashed={Hashed}, original={Original}",
+            study.Accession, originalAccession ?? "NOT FOUND");
+
+        if (string.IsNullOrEmpty(originalAccession))
+        {
+            Log.Warning("Cannot open in Clario: original accession not in memory cache for {HashedAccession}",
+                study.Accession);
+            StatusMessage = "Cannot open - accession not in memory";
+            return;
+        }
+
+        // Try to open via UI automation (search and click in Clario)
+        StatusMessage = "Opening in Clario...";
+        Log.Debug("OpenInClario: Calling ClarioLauncher.OpenStudyByAccession");
+        if (await Utils.ClarioLauncher.OpenStudyByAccession(originalAccession))
+        {
+            StatusMessage = $"Opened in Clario";
+            Log.Information("Opened study via UI automation: {Accession}", originalAccession);
+        }
+        else
+        {
+            StatusMessage = "Could not open study in Clario";
+            Log.Warning("Failed to open study via UI automation: {Accession}", originalAccession);
+        }
     }
 
     [RelayCommand]
@@ -2467,15 +3069,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Handle a "study signed" message from MosaicTools.
     /// Moves the study from pending to database.
     /// </summary>
-    public void HandleMosaicToolsSignedStudy(string accession)
+    public void HandleMosaicToolsSignedStudy(string accession, bool hasCritical = false)
     {
         // Always show message for debugging/testing, even if integration disabled
-        StatusMessage = "✅ Signed";
-        Log.Information("MosaicTools received SIGNED message for: {Accession}", accession);
+        var criticalIndicator = hasCritical ? " ⚠️" : "";
+        StatusMessage = $"✅ Signed{criticalIndicator}";
+        Log.Information("MosaicTools received SIGNED{Critical} message for: {Accession}",
+            hasCritical ? " (CRITICAL)" : "", accession);
 
         if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
         {
-            StatusMessage = "✅ Signed (off)";
+            StatusMessage = $"✅ Signed (off){criticalIndicator}";
             return;
         }
 
@@ -2484,22 +3088,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_pendingStudies.TryGetValue(accession, out var pending))
             {
                 _pendingStudies.Remove(accession);
-                Log.Information("MosaicTools confirmed SIGNED - adding to database: {Accession}", accession);
-                StatusMessage = $"✅ +{pending.Record.StudyType}";
+
+                // Apply critical result flag
+                if (hasCritical)
+                {
+                    pending.Record.HasCriticalResult = true;
+                    Log.Information("MosaicTools confirmed SIGNED with CRITICAL RESULT - adding to database: {Accession}", accession);
+                    StatusMessage = $"✅ +{pending.Record.StudyType} ⚠️";
+                }
+                else
+                {
+                    Log.Information("MosaicTools confirmed SIGNED - adding to database: {Accession}", accession);
+                    StatusMessage = $"✅ +{pending.Record.StudyType}";
+                }
 
                 // Add to database
                 AddPendingStudyToDatabase(pending);
             }
             else
             {
-                // Study not found in pending - this is a PRE-EMPTIVE signed message
-                // MosaicTools detected the study change before we did
-                // Track it so we add immediately when detected (no timeout wait)
+                // Study not found in pending queue.
+                // Check if it's still being actively tracked (user still reading it).
+                // If so, just store the signed/critical flags for when it naturally completes.
+                if (_studyTracker.IsTracking(accession))
+                {
+                    // Study is still visible in Mosaic — this is a spurious or early
+                    // SIGNED message. Store the critical flag so it can be applied when
+                    // the study naturally completes, but do NOT create a pre-emptive
+                    // entry with a fallback timer.
+                    lock (_preEmptiveSignedLock)
+                    {
+                        _preEmptiveSigned[accession] = (DateTime.Now, hasCritical);
+                    }
+                    Log.Information("MosaicTools SIGNED for actively-tracked study (still visible) - stored for later: {Accession}", accession);
+                    StatusMessage = $"✅ Signed (tracking){criticalIndicator}";
+                    // No timer needed — the study will be processed when it leaves the tracker
+                    return;
+                }
+
+                // True pre-emptive: study is not in pending and not in tracker.
+                // MosaicTools detected the study change before our extraction did.
+                // Store it so we add immediately when detected (no timeout wait).
                 lock (_preEmptiveSignedLock)
                 {
-                    _preEmptiveSigned[accession] = DateTime.Now;
-                    Log.Information("MosaicTools PRE-EMPTIVE SIGNED - will count immediately when detected: {Accession}", accession);
-                    StatusMessage = "✅ Pre-signed";
+                    _preEmptiveSigned[accession] = (DateTime.Now, hasCritical);
+                    Log.Information("MosaicTools PRE-EMPTIVE SIGNED{Critical} - will count immediately when detected: {Accession}",
+                        hasCritical ? " (CRITICAL)" : "", accession);
+                    StatusMessage = $"✅ Pre-signed{criticalIndicator}";
                 }
 
                 // Start timer to clean up old pre-emptive entries
@@ -2512,11 +3147,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Handle a "study unsigned" message from MosaicTools.
     /// Discards the study - does not add to database.
     /// </summary>
-    public void HandleMosaicToolsUnsignedStudy(string accession)
+    public void HandleMosaicToolsUnsignedStudy(string accession, bool hasCritical = false)
     {
         // Always show message for debugging/testing, even if integration disabled
+        // Note: Critical flag is accepted for API consistency but doesn't affect unsigned studies
         StatusMessage = "❌ Unsigned";
-        Log.Information("MosaicTools received UNSIGNED message for: {Accession}", accession);
+        Log.Information("MosaicTools received UNSIGNED{Critical} message for: {Accession}",
+            hasCritical ? " (CRITICAL)" : "", accession);
 
         if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
         {
@@ -2551,11 +3188,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusMessage = "❌ Temp removed";
                 UpdateRecentStudiesDisplay();
             }
+            else if (_studyTracker.IsTracking(accession))
+            {
+                // Study is still being actively tracked (user still reading it).
+                // Spurious unsigned message — just store it for when the study completes.
+                lock (_preEmptiveUnsignedLock)
+                {
+                    _preEmptiveUnsigned[accession] = DateTime.Now;
+                }
+                Log.Information("MosaicTools UNSIGNED for actively-tracked study (still visible) - stored for later: {Accession}", accession);
+                StatusMessage = "❌ Unsigned (tracking)";
+                // No timer needed — will be checked when the study leaves the tracker
+            }
             else
             {
-                // Study not found anywhere - this is a PRE-EMPTIVE unsigned message
-                // MosaicTools detected the study change before we did
-                // Track it so we discard when we detect the study completing
+                // True pre-emptive: not in pending, not in tracker, not in temp.
+                // MosaicTools detected the study change before we did.
+                // Track it so we discard when we detect the study completing.
                 lock (_preEmptiveUnsignedLock)
                 {
                     _preEmptiveUnsigned[accession] = DateTime.Now;
@@ -2594,12 +3243,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // If so, add immediately without waiting
         lock (_preEmptiveSignedLock)
         {
-            if (_preEmptiveSigned.TryGetValue(rawAccession, out var signedTime))
+            if (_preEmptiveSigned.TryGetValue(rawAccession, out var signedData))
             {
                 _preEmptiveSigned.Remove(rawAccession);
-                Log.Information("Adding study immediately due to pre-emptive SIGNED (received {Ago:F1}s ago): {Accession} ({StudyType}, {Rvu} RVU)",
-                    (DateTime.Now - signedTime).TotalSeconds, rawAccession, record.StudyType, record.Rvu);
-                StatusMessage = "✅ Pre-add";
+                var (signedTime, hasCritical) = signedData;
+
+                // Apply critical result flag from pre-emptive message
+                record.HasCriticalResult = hasCritical;
+
+                var criticalMsg = hasCritical ? " (CRITICAL)" : "";
+                Log.Information("Adding study immediately due to pre-emptive SIGNED{Critical} (received {Ago:F1}s ago): {Accession} ({StudyType}, {Rvu} RVU)",
+                    criticalMsg, (DateTime.Now - signedTime).TotalSeconds, rawAccession, record.StudyType, record.Rvu);
+                StatusMessage = hasCritical ? "✅ Pre-add ⚠️" : "✅ Pre-add";
 
                 // Add directly - create a PendingStudy just for the AddPendingStudyToDatabase call
                 var pending = new PendingStudy
@@ -2691,19 +3346,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             hasPreEmptiveUnsigned = _preEmptiveUnsigned.Count > 0;
         }
 
-        // Clean up old pre-emptive signed entries (older than 30 seconds)
+        // Clean up old pre-emptive signed entries (older than 60 seconds)
+        // Just drop them — creating 0-RVU "Unknown" records is worse than missing a count.
+        // The study will be counted normally when it actually completes via extraction.
         bool hasPreEmptiveSigned = false;
         lock (_preEmptiveSignedLock)
         {
             var expiredEntries = _preEmptiveSigned
-                .Where(kvp => (now - kvp.Value).TotalSeconds > 30)
-                .Select(kvp => kvp.Key)
+                .Where(kvp => (now - kvp.Value.Time).TotalSeconds > 60)
                 .ToList();
 
-            foreach (var key in expiredEntries)
+            foreach (var kvp in expiredEntries)
             {
-                _preEmptiveSigned.Remove(key);
-                Log.Debug("Cleaned up expired pre-emptive SIGNED entry: {Accession}", key);
+                Log.Debug("Pre-emptive SIGNED expired without match - discarding (study will be counted normally when it completes): {Accession}", kvp.Key);
+                _preEmptiveSigned.Remove(kvp.Key);
             }
 
             hasPreEmptiveSigned = _preEmptiveSigned.Count > 0;
@@ -2746,13 +3402,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
 
-            _dataManager.Database.AddRecord(shift.Id, pending.Record);
-            _studyTracker.MarkSeen(pending.RawAccession);
-            // Don't set StatusMessage here - caller already set MosaicTools message
-            Log.Information("Added pending study to database: {Accession} -> {StudyType} ({Rvu} RVU)",
-                pending.RawAccession, pending.Record.StudyType, pending.Record.Rvu);
+            try
+            {
+                _dataManager.Database.AddRecord(shift.Id, pending.Record);
+                _studyTracker.MarkSeen(pending.RawAccession);
+                // Don't set StatusMessage here - caller already set MosaicTools message
+                Log.Information("Added pending study to database: {Accession} -> {StudyType} ({Rvu} RVU)",
+                    pending.RawAccession, pending.Record.StudyType, pending.Record.Rvu);
 
-            CalculateAndUpdateStats();
+                CalculateAndUpdateStats();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to add pending record for {Accession} - study will be retried", pending.RawAccession);
+            }
         }
         else
         {
@@ -2767,14 +3430,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+
     public void Dispose()
     {
         _refreshTimer.Stop();
         _statsTimer.Stop();
         _fatigueTimer.Stop();
+        _backupTimer.Stop();
         _pendingStudiesTimer?.Stop();
         _teamSyncTimer?.Stop();
         _teamSyncService?.Dispose();
+        StopPipeClient();
         Utils.WindowExtraction.Cleanup();
         _dataManager.Dispose();
         LoggingConfig.Shutdown();

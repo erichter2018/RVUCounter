@@ -410,31 +410,170 @@ taskkill //F //IM RVUCounter.exe 2>/dev/null; sleep 1; c:/Users/erik.richter/Des
 
   - **RVUCounter.csproj**: Added `AssemblyVersion` and `FileVersion` properties
 
-## Current State (Session End: 2026-01-24)
+### 2026-01-26 (Session 5) - Critical Results Integration
+- **Critical Results Feature**: Expanded MosaicTools WM_COPYDATA integration from 2 to 4 message types to track critical results
+
+  - **MainWindow.xaml.cs**: Updated WM_COPYDATA handler:
+    - Added `CYCLEDATA_STUDY_SIGNED_CRITICAL = 3` constant
+    - Added `CYCLEDATA_STUDY_UNSIGNED_CRITICAL = 4` constant
+    - Handler now detects critical message types and passes `hasCritical` flag to ViewModel
+
+  - **MainViewModel.cs**: Critical results tracking:
+    - Added `_criticalStudies` HashSet<string> for tracking critical accessions
+    - Updated `HandleMosaicToolsSignedStudy(accession, hasCritical)` signature
+    - Updated `HandleMosaicToolsUnsignedStudy(accession, hasCritical)` signature
+    - Added `ShowCriticalOnly` filter toggle property
+    - Added `CriticalResultsCount` observable property
+    - Added `ToggleCriticalFilterCommand` to filter recent studies
+    - Added `MarkStudyAsCritical()` and `UpdateCriticalResultsCount()` helpers
+    - Updated `_preEmptiveSigned` dictionary to store `(DateTime, bool)` tuple for critical flag
+    - `CalculateAndUpdateStats()` now applies critical filter and updates count
+    - `UpdateRecentStudiesDisplay()` handles critical filter for temp studies
+
+  - **Models/StudyRecord.cs**: Added `HasCriticalResult` bool property (persisted to database)
+
+  - **Data/RecordsDatabase.cs**:
+    - Added `has_critical_result INTEGER DEFAULT 0` column to records table
+    - Added migration for existing databases
+    - Updated all INSERT queries (`AddRecord`, `BatchAddRecords`, `InsertHistoricalShift`)
+    - Updated `UpdateRecord` to include `has_critical_result`
+    - Updated `ReadRecord` to read `has_critical_result` column
+
+  - **MainWindow.xaml**: UI updates:
+    - Added critical results count badge (red ⚠️ N) in Recent Studies header
+    - Added ⚠️ icon before procedure name for studies with critical results
+    - Updated column definitions to accommodate critical icon
+
+  - **New Files**:
+    - `Converters/PositiveToVisibilityConverter.cs` - Shows element when value > 0
+
+  - **App.xaml**: Registered `PositiveToVisibilityConverter`
+
+### 2026-01-26 (Session 5 continued) - Patient Name & Site Code Extraction
+- **Patient Info Scraping**: Added memory-only extraction of patient name and site code from Mosaic
+
+  - **MosaicStudyData class**: Added new properties:
+    - `PatientName` - Patient name from Mosaic (e.g., "Millson Diana")
+    - `SiteCode` - Site code from Mosaic (e.g., "MLC")
+
+  - **MosaicExtractor.cs**: Added extraction methods:
+    - `ExtractPatientName()` - Detects all-caps names like "MILLSON DIANA", converts to title case
+    - `ExtractSiteCode()` - Parses "Site Code: MLC" pattern
+    - Integrated into main `ExtractStudyData()` method (single scrape pass)
+
+  - **MainViewModel.cs**: Memory-only storage:
+    - Added `_patientNameCache` Dictionary<string, string> (keyed by hashed accession)
+    - Added `_siteCodeCache` Dictionary<string, string> (keyed by hashed accession)
+    - Added `GetPatientName(hashedAccession)` and `GetSiteCode(hashedAccession)` lookup methods
+    - Added `GetStudyTooltip(study)` helper for formatting tooltip text
+    - Added `CurrentPatientName` and `CurrentSiteCode` observable properties for current study display
+    - Caches are populated during scan but never persisted to database
+
+  - **MainWindow.xaml**: UI updates:
+    - Recent Studies items now have rich tooltips showing:
+      - Patient name (bold, if available)
+      - Site code (if available)
+      - Procedure, Study Type, RVU, Patient Class, Time
+      - Critical result indicator
+    - Current Study panel now displays:
+      - Patient name (bold, top line when available)
+      - Site code inline with Patient Class: "Patient Class: Inpatient | Site: MLC"
+
+  - **New Converters**:
+    - `PatientNameConverter.cs` - Looks up patient name from ViewModel cache
+    - `PatientNameVisibilityConverter.cs` - Shows/hides based on cache presence
+    - `SiteCodeConverter.cs` - Looks up and formats site code
+    - `SiteCodeVisibilityConverter.cs` - Shows/hides based on cache presence
+    - `NonEmptyToVisibilityConverter.cs` - Generic non-empty string visibility
+
+  - **Privacy by Design**:
+    - Patient names and site codes are stored in memory only
+    - Never written to SQLite database or any file
+    - Cleared automatically when app restarts
+    - Uses hashed accession as key for lookup
+
+### 2026-01-27 (Session 6) - ClarioLauncher: Open Study via UI Automation
+- **ClarioLauncher.cs** completely rewritten — replaced XML file drop with UI automation
+
+  - **How it works** (full flow):
+    1. Find Clario Chrome window via `ClarioExtractor.FindClarioChromeWindow(useCache: false)`
+    2. Find accession search field using **fulltext anchor** strategy:
+       - Query all Edit controls via `FindAllDescendants(ByControlType.Edit)`
+       - Find the `fulltext-*-inputEl` field (stable AutomationId prefix)
+       - The **next** Edit field after it is always the accession search box
+       - This is stable regardless of how many extra fields appear when search results are open
+    3. Set the accession value (UIA Value pattern, or Focus + Ctrl+A + type fallback)
+    4. Press Enter to trigger search
+    5. Wait 2 seconds for results to load
+    6. Re-fetch Clario window, scan all DataItem elements
+    7. Find action column cell: ClassName must contain both `search_result` and `action-col-cell`
+    8. Click at 55% from left edge, center vertically via `FlaUI.Core.Input.Mouse.Click()`
+
+  - **Key technical decisions**:
+    - All UI automation runs on `Task.Run()` background thread — UIA3 COM singleton may be created on thread pool thread (from enrichment), calling from UI thread silently fails
+    - FlaUI's flat `FindAllDescendants()` only finds 3 Edit fields in Chrome; the native UIA condition query `FindAllDescendants(ByControlType.Edit)` finds all 12+
+    - Index-based field selection is fragile (field count changes when search results are open); anchor-based (`fulltext-*` → next field) is stable
+    - Action cell must match `search_result` in ClassName to avoid clicking worklist rows
+
+  - **Clario search form layout** (ExtJS grid, all Edit fields unnamed):
+    - `textfield-XXXX-inputEl` — Last Name
+    - `textfield-XXXX-inputEl` — First Name (ClassName contains `navigation_search_firstName_fieldCls`)
+    - `fulltext-XXXX-inputEl` — Fulltext search (has trigger button with `trigger-search` class)
+    - `textfield-XXXX-inputEl` — **Accession** (the one we target)
+    - `comboMany-XXXX-inputEl` — Modality combo
+    - `textfield-XXXX-inputEl` — Other
+    - IDs are dynamic (numbers change across sessions), but prefixes and order are stable
+
+  - **`MainViewModel.OpenInClario`**: Calls `await ClarioLauncher.OpenStudyByAccession(originalAccession)` — no MRN needed, async Task
+
+- **Bug fixes this session**:
+  - UIA3 COM threading: `FindClarioChromeWindow` returned null from UI thread but worked from background thread. Fixed by wrapping all automation in `Task.Run()`
+  - Chrome address bar matched as "search" field — added exclusion for `address`/`omnibox` in Name/AutomationId
+  - FlaUI `FindAllDescendants()` missed deep Chrome renderer elements (only 3 of 12 Edit fields) — switched to UIA condition-filtered query which finds all
+  - History search field (`navigation_history_Search_textfield-inputEl`) matched before accession field — switched from keyword matching to fulltext-anchor strategy
+
+## Current State (Session End: 2026-01-26)
 
 ### Last Build
 - **Status**: Successfully compiled and published
 - **Location**: `C:\Users\erik.richter\Desktop\RVUCounter\csharp\RVUCounter\bin\Release\net8.0-windows\win-x64\publish\RVUCounter.exe`
-- **Warnings**: Only minor CS0219 warning in PaceComparisonDialog.cs (non-critical)
+- **Warnings**: Only MVVM toolkit warnings (pre-existing, non-critical)
 
-### Completed This Session (Session 4)
-Auto-update implementation using MosaicTools-style rename approach:
-1. ✅ Rewrote `UpdateManager.cs` with rename-based update mechanism
-2. ✅ Added `CleanupOldVersion()` for post-update cleanup
-3. ✅ Added `AutoUpdateEnabled` setting (default: true)
-4. ✅ Startup update check with WhatsNewWindow display on version change
-5. ✅ Manual "Check for Updates" button in Settings
-6. ✅ Progress reporting during download
-7. ✅ Version skip functionality (user can choose to skip a version)
-8. ✅ Prefers ZIP over EXE for downloads
-9. ✅ Proper timeouts (15s API, 5min download)
-10. ✅ Application rebuilt and published successfully
+### Completed This Session (Session 5)
+**Critical Results Integration with MosaicTools:**
+1. ✅ Added 2 new message types (SIGNED_CRITICAL=3, UNSIGNED_CRITICAL=4)
+2. ✅ Updated WM_COPYDATA handler to detect critical messages
+3. ✅ Added HasCriticalResult property to StudyRecord model
+4. ✅ Database schema migration for has_critical_result column
+5. ✅ All INSERT/UPDATE queries updated to include critical flag
+6. ✅ Critical results count badge in Recent Studies header
+7. ✅ ⚠️ icon shown next to studies with critical results
+8. ✅ ShowCriticalOnly filter to view only critical studies
+9. ✅ Pre-emptive signed messages preserve critical flag
+
+**Patient Name & Site Code Extraction:**
+10. ✅ Added patient name extraction from Mosaic (all-caps "LASTNAME FIRSTNAME" format)
+11. ✅ Added site code extraction from Mosaic ("Site Code: MLC" pattern)
+12. ✅ Memory-only storage (never persisted to database for privacy)
+13. ✅ Rich tooltips on Recent Studies showing patient name and site
+14. ✅ Current Study panel shows patient name and site code
+
+**UI Cleanup & Critical Filter:**
+15. ✅ Removed right-click "View Details" popup (tooltips now show all info)
+16. ✅ Added clickable critical filter button (⚠️ badge) next to Undo
+17. ✅ Button toggles between showing all studies vs critical-only
+18. ✅ Button changes color when filter is active (red = filtering)
+19. ✅ Shortened "Temporary - No shift started" to "Temporary"
+20. ✅ Updated About section with comprehensive HIPAA/privacy language
+21. ✅ Application rebuilt and published successfully
 
 ### Feature Parity Status
-The C# application now has comprehensive feature parity with Python plus auto-update:
+The C# application now has comprehensive feature parity with Python plus:
 - **Auto-Update**: Rename-based update mechanism (works while app is running)
-- **Recent Studies**: Procedure name, delete button, time ago, duration, red for invalid modalities
-- **Current Study**: Correct RVU format (F1)
+- **Critical Results**: MosaicTools integration with visual indicators and filtering
+- **Patient Info (Memory Only)**: Patient name and site code extraction with tooltips
+- **Recent Studies**: Procedure name, delete button, time ago, duration, red for invalid modalities, ⚠️ for critical, rich tooltips with patient info
+- **Current Study**: Patient name, site code, accession, procedure, RVU
 - **Pace Car**: Arrow symbols with ahead/behind text
 - **Statistics**: All 11 view modes with correct column formats
 - **Settings**: ShowTime toggle, AutoUpdateEnabled toggle
@@ -445,3 +584,4 @@ The C# application now has comprehensive feature parity with Python plus auto-up
 - Test with actual Mosaic to verify extraction works correctly
 - Consider adding more detailed logging for debugging study flow
 - Test auto-update with actual GitHub releases
+- Add filter button UI to toggle critical-only view (currently only via command)

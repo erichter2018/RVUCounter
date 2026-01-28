@@ -1,6 +1,4 @@
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Data.Sqlite;
 using RVUCounter.Data;
 using Serilog;
@@ -10,12 +8,12 @@ namespace RVUCounter.Logic;
 /// <summary>
 /// Handles migration of database records to HIPAA-compliant hashed accession numbers.
 /// Ported from Python hipaa_migration.py.
+/// Uses DataManager.HashAccession() for Python-compatible hashing.
 /// </summary>
 public class HIPAAMigrator
 {
     private readonly DataManager _dataManager;
     private readonly string _dbPath;
-    private readonly byte[] _salt;
     private readonly BackupManager _backupManager;
 
     public event Action<string, double>? ProgressChanged;
@@ -27,12 +25,6 @@ public class HIPAAMigrator
         _dbPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "RVUCounter", "database.db");
-
-        // Get salt from settings
-        var saltBase64 = dataManager.Settings.HipaaSalt;
-        _salt = string.IsNullOrEmpty(saltBase64)
-            ? new byte[32]
-            : Convert.FromBase64String(saltBase64);
     }
 
     /// <summary>
@@ -158,7 +150,8 @@ public class HIPAAMigrator
 
                     if (!string.IsNullOrEmpty(accession))
                     {
-                        var hashed = HashAccession(accession);
+                        // Use DataManager's Python-compatible hash algorithm
+                        var hashed = _dataManager.HashAccession(accession);
                         updates.Add((hashed, id));
                     }
                 }
@@ -279,23 +272,6 @@ public class HIPAAMigrator
         {
             return oldName;
         }
-    }
-
-    /// <summary>
-    /// Hash an accession number using SHA256 with salt.
-    /// </summary>
-    private string HashAccession(string accession)
-    {
-        if (string.IsNullOrEmpty(accession))
-            return "";
-
-        var input = Encoding.UTF8.GetBytes(accession.Trim());
-        var combined = input.Concat(_salt).ToArray();
-
-        using var sha256 = SHA256.Create();
-        var hash = sha256.ComputeHash(combined);
-
-        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     /// <summary>

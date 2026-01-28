@@ -145,6 +145,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _showPaceCar;
 
+    [ObservableProperty]
+    private bool _showInpatientStatPercentage;
+
     // ===========================================
     // COMPENSATION VISIBILITY TOGGLES
     // ===========================================
@@ -797,6 +800,7 @@ public partial class SettingsViewModel : ObservableObject
         ShowProjected = settings.ShowProjected;
         ShowProjectedShift = settings.ShowProjectedShift;
         ShowPaceCar = settings.ShowPaceCar;
+        ShowInpatientStatPercentage = settings.ShowInpatientStatPercentage;
 
         // Compensation visibility
         ShowCompTotal = settings.ShowCompTotal;
@@ -856,6 +860,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.ShowProjected = ShowProjected;
         settings.ShowProjectedShift = ShowProjectedShift;
         settings.ShowPaceCar = ShowPaceCar;
+        settings.ShowInpatientStatPercentage = ShowInpatientStatPercentage;
 
         // Compensation visibility
         settings.ShowCompTotal = ShowCompTotal;

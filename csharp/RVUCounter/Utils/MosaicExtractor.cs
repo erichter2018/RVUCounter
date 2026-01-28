@@ -71,26 +71,29 @@ public static class MosaicExtractor
                         elementData.Add((name.Trim(), text.Trim(), i));
                     }
                 }
-                catch { /* Skip problematic elements */ }
+                catch (Exception ex) { Log.Debug("Skipping element {Index}: {Error}", i, ex.Message); }
             }
 
-            // =====================================================================
-            // FIRST PASS: Look for "Current Study" label - accession is right below
-            // This is the most reliable method for single accessions
-            // =====================================================================
+            // Single pass: extract all fields by recognizing labels and looking ahead
+            // Priority for accession: "Current Study" label > "Accession" label > fallback scan
+            // Priority for procedure: embedded in accession extraction > "Description:" label
+            bool foundCurrentStudy = false;
+            bool foundAccessionLabel = false;
+
             for (int i = 0; i < elementData.Count; i++)
             {
                 var (name, text, _) = elementData[i];
-                var combined = $"{name} {text}".ToLowerInvariant();
+                var combined = $"{name} {text}";
+                var combinedLower = combined.ToLowerInvariant();
+                var nameLower = name.ToLowerInvariant();
 
-                if (combined.Contains("current study"))
+                // --- Accession via "Current Study" label (highest priority) ---
+                if (!foundCurrentStudy && combinedLower.Contains("current study"))
                 {
-                    // Look at nearby elements for the accession (should be right below)
+                    foundCurrentStudy = true;
                     for (int j = i + 1; j < Math.Min(i + 15, elementData.Count); j++)
                     {
                         var nextName = elementData[j].Name;
-
-                        // Skip if it looks like a label or MRN
                         if (!string.IsNullOrEmpty(nextName) && !nextName.EndsWith(":") &&
                             !nextName.ToLowerInvariant().Contains("mrn"))
                         {
@@ -105,86 +108,60 @@ public static class MosaicExtractor
                             }
                         }
                     }
-                    break;
                 }
-            }
 
-            // =====================================================================
-            // SECOND PASS: Look for explicit "Accession" label
-            // =====================================================================
-            if (string.IsNullOrEmpty(result.Accession))
-            {
-                for (int i = 0; i < elementData.Count; i++)
+                // --- Accession via "Accession" label (second priority) ---
+                if (!foundAccessionLabel && string.IsNullOrEmpty(result.Accession) &&
+                    combinedLower.Contains("accession") && combined.Contains(":"))
                 {
-                    var (name, text, _) = elementData[i];
-                    var combined = $"{name} {text}";
-
-                    if (combined.ToLowerInvariant().Contains("accession") && combined.Contains(":"))
+                    foundAccessionLabel = true;
+                    for (int j = i + 1; j < Math.Min(i + 15, elementData.Count); j++)
                     {
-                        for (int j = i + 1; j < Math.Min(i + 15, elementData.Count); j++)
+                        var nextName = elementData[j].Name;
+                        var nextText = elementData[j].Text;
+
+                        if (nextName.ToLowerInvariant().Contains("mrn") ||
+                            nextText.ToLowerInvariant().Contains("mrn"))
+                            continue;
+
+                        if (!string.IsNullOrEmpty(nextName))
                         {
-                            var nextName = elementData[j].Name;
-                            var nextText = elementData[j].Text;
-
-                            // Skip MRN values
-                            if (nextName.ToLowerInvariant().Contains("mrn") ||
-                                nextText.ToLowerInvariant().Contains("mrn"))
-                                continue;
-
-                            // Try name first
-                            if (!string.IsNullOrEmpty(nextName))
+                            var extracted = ExtractAccessionWithProcedure(nextName);
+                            if (extracted != null)
                             {
-                                var extracted = ExtractAccessionWithProcedure(nextName);
-                                if (extracted != null)
-                                {
-                                    result.Accession = extracted.Value.Accession;
-                                    if (!string.IsNullOrEmpty(extracted.Value.Procedure) &&
-                                        string.IsNullOrEmpty(result.Procedure))
-                                        result.Procedure = extracted.Value.Procedure;
-                                    Log.Debug("Found accession via 'Accession' label: {Accession}", result.Accession);
-                                    break;
-                                }
-                            }
-
-                            // Try text
-                            if (!string.IsNullOrEmpty(nextText))
-                            {
-                                var extracted = ExtractAccessionWithProcedure(nextText);
-                                if (extracted != null)
-                                {
-                                    result.Accession = extracted.Value.Accession;
-                                    Log.Debug("Found accession via 'Accession' label (text): {Accession}", result.Accession);
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            // =====================================================================
-            // THIRD PASS: Look for "Description:" label for procedure
-            // =====================================================================
-            if (string.IsNullOrEmpty(result.Procedure))
-            {
-                for (int i = 0; i < elementData.Count; i++)
-                {
-                    var name = elementData[i].Name;
-
-                    if (name.ToLowerInvariant().Contains("description:"))
-                    {
-                        // Value might be after the colon in the same element
-                        if (name.Contains(":"))
-                        {
-                            var procValue = name.Split(':', 2)[1].Trim();
-                            if (!string.IsNullOrEmpty(procValue))
-                            {
-                                result.Procedure = procValue;
+                                result.Accession = extracted.Value.Accession;
+                                if (!string.IsNullOrEmpty(extracted.Value.Procedure) &&
+                                    string.IsNullOrEmpty(result.Procedure))
+                                    result.Procedure = extracted.Value.Procedure;
+                                Log.Debug("Found accession via 'Accession' label: {Accession}", result.Accession);
                                 break;
                             }
                         }
-                        // Or look at next element
+
+                        if (!string.IsNullOrEmpty(nextText))
+                        {
+                            var extracted = ExtractAccessionWithProcedure(nextText);
+                            if (extracted != null)
+                            {
+                                result.Accession = extracted.Value.Accession;
+                                Log.Debug("Found accession via 'Accession' label (text): {Accession}", result.Accession);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // --- Procedure via "Description:" label ---
+                if (string.IsNullOrEmpty(result.Procedure) && nameLower.Contains("description:"))
+                {
+                    if (name.Contains(":"))
+                    {
+                        var procValue = name.Split(':', 2)[1].Trim();
+                        if (!string.IsNullOrEmpty(procValue))
+                            result.Procedure = procValue;
+                    }
+                    if (string.IsNullOrEmpty(result.Procedure))
+                    {
                         for (int j = i + 1; j < Math.Min(i + 3, elementData.Count); j++)
                         {
                             var nextName = elementData[j].Name;
@@ -194,87 +171,88 @@ public static class MosaicExtractor
                                 break;
                             }
                         }
-                        break;
                     }
                 }
-            }
 
-            // =====================================================================
-            // FOURTH PASS: Look for procedure keywords (CT, MR, XR, etc.)
-            // =====================================================================
-            if (string.IsNullOrEmpty(result.Procedure))
-            {
-                foreach (var (name, _, _) in elementData)
+                // --- Patient class ---
+                if (string.IsNullOrEmpty(result.PatientClass))
                 {
-                    if (IsProcedureText(name))
+                    var pc = ExtractPatientClass(name) ?? ExtractPatientClass(text);
+                    if (!string.IsNullOrEmpty(pc))
+                        result.PatientClass = pc;
+                }
+
+                // --- Patient name (memory only) ---
+                if (string.IsNullOrEmpty(result.PatientName))
+                {
+                    var patientName = ExtractPatientName(name);
+                    if (!string.IsNullOrEmpty(patientName))
                     {
-                        result.Procedure = name;
-                        break;
+                        result.PatientName = patientName;
+                        Log.Debug("Found patient name: {PatientName}", result.PatientName);
                     }
                 }
-            }
 
-            // =====================================================================
-            // FALLBACK PASS: Scan for any accession-like strings
-            // =====================================================================
-            if (string.IsNullOrEmpty(result.Accession))
-            {
-                foreach (var (name, text, _) in elementData)
+                // --- Site code (memory only) ---
+                if (string.IsNullOrEmpty(result.SiteCode))
+                {
+                    var siteCode = ExtractSiteCode(name) ?? ExtractSiteCode(text);
+                    if (!string.IsNullOrEmpty(siteCode))
+                    {
+                        result.SiteCode = siteCode;
+                        Log.Debug("Found site code: {SiteCode}", result.SiteCode);
+                    }
+                }
+
+                // --- MRN (memory only) ---
+                if (string.IsNullOrEmpty(result.Mrn))
+                {
+                    var mrn = ExtractMrn(name) ?? ExtractMrn(text);
+                    if (!string.IsNullOrEmpty(mrn))
+                    {
+                        result.Mrn = mrn;
+                        Log.Debug("Found MRN: {Mrn}", result.Mrn);
+                    }
+                }
+
+                // --- Fallback: accession from any text containing accession-like pattern ---
+                // Skip elements containing "mrn" to avoid extracting MRN as accession
+                if (string.IsNullOrEmpty(result.Accession) &&
+                    !nameLower.Contains("mrn") && !text.ToLowerInvariant().Contains("mrn"))
                 {
                     var accessions = ExtractAccessionsFromText(name);
+                    if (accessions.Count == 0)
+                        accessions = ExtractAccessionsFromText(text);
                     if (accessions.Count > 0)
                     {
                         result.Accession = accessions[0];
                         result.AllAccessions = accessions;
                         result.IsMultiAccession = accessions.Count > 1;
                         Log.Debug("Found accession via fallback scan: {Accession} (multi={IsMulti})", result.Accession, result.IsMultiAccession);
-                        break;
-                    }
-
-                    accessions = ExtractAccessionsFromText(text);
-                    if (accessions.Count > 0)
-                    {
-                        result.Accession = accessions[0];
-                        result.AllAccessions = accessions;
-                        result.IsMultiAccession = accessions.Count > 1;
-                        Log.Debug("Found accession via fallback scan (text): {Accession} (multi={IsMulti})", result.Accession, result.IsMultiAccession);
-                        break;
                     }
                 }
             }
 
-            // Look for patient class
-            foreach (var (name, text, _) in elementData)
+            // Safety net: reject accession if it matches the extracted MRN
+            // The MRN is per-patient, not per-study, so using it as accession would
+            // cause all studies from the same patient to hash identically
+            if (!string.IsNullOrEmpty(result.Accession) && !string.IsNullOrEmpty(result.Mrn))
             {
-                var pc = ExtractPatientClass(name) ?? ExtractPatientClass(text);
-                if (!string.IsNullOrEmpty(pc))
+                var accTrimmed = result.Accession.Trim();
+                var mrnTrimmed = result.Mrn.Trim();
+                if (accTrimmed.Equals(mrnTrimmed, StringComparison.OrdinalIgnoreCase))
                 {
-                    result.PatientClass = pc;
-                    break;
+                    Log.Warning("Rejected accession '{Accession}' - matches MRN '{Mrn}'. " +
+                        "If your site uses MRN as accession, this study was dropped.",
+                        result.Accession, result.Mrn);
+                    result.Accession = null;
+                    result.AllAccessions.Clear();
+                    result.IsMultiAccession = false;
                 }
             }
 
-            // =====================================================================
-            // VALIDATION: Reject false positives from UI elements
-            // =====================================================================
             if (!string.IsNullOrEmpty(result.Accession))
             {
-                // Check if procedure looks like a real procedure or just UI garbage
-                if (!string.IsNullOrEmpty(result.Procedure) && IsUiGarbageText(result.Procedure))
-                {
-                    Log.Debug("Rejecting extraction - procedure looks like UI text: {Procedure}", result.Procedure);
-                    return null;
-                }
-
-                // If we only found via fallback scan (no "Current Study" or "Accession" label),
-                // require a valid-looking procedure to confirm it's real
-                if (string.IsNullOrEmpty(result.Procedure) || !IsProcedureText(result.Procedure))
-                {
-                    // No valid procedure found - this is likely a false positive
-                    Log.Debug("Rejecting extraction - no valid procedure found for accession {Accession}", result.Accession);
-                    return null;
-                }
-
                 Log.Information("Extracted from Mosaic: {Accession} - {Procedure}",
                     result.Accession, result.Procedure);
             }
@@ -352,70 +330,7 @@ public static class MosaicExtractor
         return accessions;
     }
 
-    /// <summary>
-    /// Check if text looks like a procedure description.
-    /// </summary>
-    private static bool IsProcedureText(string text)
-    {
-        // Procedures are typically 5-80 characters
-        if (string.IsNullOrWhiteSpace(text) || text.Length < 5 || text.Length > 80)
-            return false;
 
-        // First check if it's UI garbage
-        if (IsUiGarbageText(text))
-            return false;
-
-        var lower = text.ToLowerInvariant();
-
-        // Procedure keywords
-        string[] keywords = { "ct ", "mri ", "mr ", "xr ", "x-ray", "ultrasound", "us ",
-            "chest", "abdomen", "pelvis", "brain", "head", "spine", "neck",
-            "with contrast", "without contrast", "w/o contrast", "w/ contrast",
-            "bilateral", "left", "right", "extremity", "ankle", "knee", "hip",
-            "shoulder", "wrist", "elbow", "foot", "hand", "finger", "toe",
-            "lumbar", "thoracic", "cervical", "cardiac", "heart", "aorta",
-            "angio", "venous", "arterial", "doppler", "echo", "mammogram",
-            "fluoro", "pet", "nuclear", "bone scan", "dexa" };
-
-        return keywords.Any(k => lower.Contains(k));
-    }
-
-    /// <summary>
-    /// Check if text looks like UI garbage (not a real procedure).
-    /// </summary>
-    private static bool IsUiGarbageText(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return true;
-
-        // Procedures are concise - reject long text (likely dictation/transcript)
-        if (text.Length > 80)
-            return true;
-
-        var lower = text.ToLowerInvariant();
-
-        // Common UI element patterns that are NOT procedures
-        string[] uiPatterns = {
-            "profile", "status", "available", "unavailable", "online", "offline",
-            "logged in", "logged out", "sign in", "sign out", "login", "logout",
-            "settings", "preferences", "options", "menu", "toolbar", "button",
-            "click", "select", "choose", "enter", "type", "search",
-            "loading", "please wait", "processing", "saving",
-            "welcome", "hello", "user", "admin", "guest",
-            "version", "copyright", "license", "help", "about",
-            "minimize", "maximize", "close", "exit", "cancel", "ok",
-            "yes", "no", "confirm", "submit", "apply", "reset",
-            "notification", "alert", "warning", "error", "info",
-            "tab", "panel", "window", "dialog", "form",
-            "n/a", "none", "empty", "null", "undefined",
-            // Dictation/transcript patterns
-            "please ", "summarize", "irrelevant", "repetitive",
-            "only if", "make sure", "remember to", "don't forget",
-            "note that", "be sure", "ensure that"
-        };
-
-        return uiPatterns.Any(pattern => lower.Contains(pattern));
-    }
 
     /// <summary>
     /// Extract patient class from text.
@@ -430,6 +345,99 @@ public static class MosaicExtractor
             return "Outpatient";
         if (lower.Contains("emergency") || lower.Contains("er ") || lower.Contains("ed "))
             return "Emergency";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extract patient name from text.
+    /// Mosaic displays patient names as all-caps: "LASTNAME FIRSTNAME" or "LASTNAME FIRSTNAME MIDDLE"
+    /// </summary>
+    private static string? ExtractPatientName(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        text = text.Trim();
+
+        // Patient names are typically 2-4 words, all uppercase, 5-50 chars
+        if (text.Length < 5 || text.Length > 50)
+            return null;
+
+        // Must be all uppercase (Mosaic format)
+        if (text != text.ToUpperInvariant())
+            return null;
+
+        // Must have 2-4 space-separated words (last, first, optional middle/suffix)
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length < 2 || words.Length > 4)
+            return null;
+
+        // Each word should be alphabetic (allow hyphens for hyphenated names)
+        foreach (var word in words)
+        {
+            if (!Regex.IsMatch(word, @"^[A-Z][A-Z\-']*$"))
+                return null;
+        }
+
+        // Reject common UI/medical terms that might look like names
+        string[] excludePatterns = {
+            "CURRENT STUDY", "SITE CODE", "SITE GROUP", "BODY PART",
+            "STUDY DATE", "ORDERING", "REASON FOR", "MRN", "ACCESSION",
+            "FINAL REPORT", "CLINICAL HISTORY", "COMPARISON", "IMPRESSION",
+            "FINDINGS", "EXAM", "VIEW", "CONTRAST", "BILATERAL",
+            "LINES TUBES", "SOFT TISSUES", "BONES", "BOWEL",
+            "SIGN FINAL", "PROCESS REPORT", "CREATE IMPRESSION",
+            "OPEN", "CLOSE", "MINIMIZE", "MAXIMIZE", "ACTIONS"
+        };
+
+        // Use word boundary matching instead of substring to avoid
+        // rejecting names like "LINESMITH" which contains "LINES"
+        if (excludePatterns.Any(p => text == p ||
+            text.StartsWith(p + " ") ||
+            text.EndsWith(" " + p) ||
+            text.Contains(" " + p + " ")))
+            return null;
+
+        // Convert to title case for display: "MILLSON DIANA" -> "Millson Diana"
+        var titleCase = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text.ToLower());
+        return titleCase;
+    }
+
+    /// <summary>
+    /// Extract site code from text.
+    /// Format: "Site Code: MLC" or just a 2-4 letter site code near site label
+    /// </summary>
+    private static string? ExtractSiteCode(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        // Look for "Site Code: XXX" pattern
+        var match = Regex.Match(text, @"Site\s*Code:\s*([A-Z]{2,5})", RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            return match.Groups[1].Value.ToUpperInvariant();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extract MRN (Medical Record Number) from text.
+    /// Format: "MRN: 1057034TCR" - alphanumeric, typically 6-15 characters
+    /// </summary>
+    private static string? ExtractMrn(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        // Look for "MRN: XXX" pattern
+        var match = Regex.Match(text, @"MRN:\s*([A-Z0-9]{5,20})", RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            return match.Groups[1].Value.ToUpperInvariant();
+        }
 
         return null;
     }
@@ -485,4 +493,23 @@ public class MosaicStudyData
     public string PatientClass { get; set; } = "Unknown";
     public bool IsMultiAccession { get; set; }
     public List<string> AllAccessions { get; set; } = new();
+
+    /// <summary>
+    /// Patient name extracted from Mosaic (memory only, not persisted).
+    /// Format: "LASTNAME FIRSTNAME" (all caps from Mosaic)
+    /// </summary>
+    public string? PatientName { get; set; }
+
+    /// <summary>
+    /// Site code extracted from Mosaic (memory only, not persisted).
+    /// Example: "MLC", "UNM", etc.
+    /// </summary>
+    public string? SiteCode { get; set; }
+
+    /// <summary>
+    /// Medical Record Number (MRN) extracted from Mosaic (memory only, not persisted).
+    /// Required for opening studies via XML file drop.
+    /// Example: "1057034TCR", "980562570MCR"
+    /// </summary>
+    public string? Mrn { get; set; }
 }

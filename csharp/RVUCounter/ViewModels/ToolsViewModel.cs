@@ -11,7 +11,7 @@ namespace RVUCounter.ViewModels;
 
 /// <summary>
 /// ViewModel for the Tools window.
-/// Provides database utilities: manual entry, repair, export, Excel audit, payroll sync.
+/// Provides: Database Repair, Payroll Reconciliation, Backup & Restore.
 /// </summary>
 public partial class ToolsViewModel : ObservableObject
 {
@@ -34,22 +34,6 @@ public partial class ToolsViewModel : ObservableObject
     [ObservableProperty]
     private int _progress;
 
-    // Manual entry fields
-    [ObservableProperty]
-    private string _manualAccession = "";
-
-    [ObservableProperty]
-    private string _manualProcedure = "";
-
-    [ObservableProperty]
-    private string _manualStudyType = "";
-
-    [ObservableProperty]
-    private double _manualRvu;
-
-    [ObservableProperty]
-    private string _manualPatientClass = "";
-
     // Database stats
     [ObservableProperty]
     private int _totalShifts;
@@ -60,7 +44,7 @@ public partial class ToolsViewModel : ObservableObject
     [ObservableProperty]
     private double _totalRvu;
 
-    // Excel audit fields
+    // Payroll Reconciliation - single Excel file for all operations
     [ObservableProperty]
     private string _excelFilePath = "";
 
@@ -73,12 +57,15 @@ public partial class ToolsViewModel : ObservableObject
     [ObservableProperty]
     private ExcelAuditResult? _lastAuditResult;
 
-    // Payroll sync fields
     [ObservableProperty]
     private PayrollSyncResult? _lastSyncResult;
 
-    [ObservableProperty]
-    private int _selectedShiftId;
+    // Computed property for whether reconcile is available
+    public bool CanReconcile => LastAuditResult?.Success == true &&
+        (LastAuditResult.MissingFromDb > 0 || LastAuditResult.ExtraInDb > 0);
+
+    // Computed property for whether time sync is available
+    public bool CanApplyTimeSync => LastSyncResult?.Success == true;
 
     // Backup status
     [ObservableProperty]
@@ -132,72 +119,17 @@ public partial class ToolsViewModel : ObservableObject
         }
     }
 
-    #region Manual Entry
-
-    [RelayCommand]
-    private void AddManualStudy()
+    partial void OnLastAuditResultChanged(ExcelAuditResult? value)
     {
-        if (string.IsNullOrWhiteSpace(ManualStudyType))
-        {
-            StatusText = "Error: Study Type is required";
-            return;
-        }
-
-        var shift = _dataManager.Database.GetCurrentShift();
-        if (shift == null)
-        {
-            StatusText = "Error: No active shift";
-            return;
-        }
-
-        var accession = string.IsNullOrWhiteSpace(ManualAccession)
-            ? $"MANUAL-{DateTime.Now:HHmmss}"
-            : ManualAccession;
-
-        var record = new StudyRecord
-        {
-            Accession = _dataManager.HashAccession(accession),
-            Procedure = ManualProcedure,
-            StudyType = ManualStudyType,
-            Rvu = ManualRvu > 0 ? ManualRvu : LookupRvu(ManualStudyType),
-            Timestamp = DateTime.Now,
-            PatientClass = ManualPatientClass,
-            Source = "Manual"
-        };
-
-        _dataManager.Database.AddRecord(shift.Id, record);
-        LoadDatabaseStats();
-        _onDatabaseChanged?.Invoke();
-
-        // Clear form
-        ManualAccession = "";
-        ManualProcedure = "";
-        ManualStudyType = "";
-        ManualRvu = 0;
-        ManualPatientClass = "";
-
-        StatusText = $"Added: {record.StudyType} ({record.Rvu:F2} RVU)";
-        Log.Information("Manual study added: {StudyType}", record.StudyType);
+        OnPropertyChanged(nameof(CanReconcile));
     }
 
-    private double LookupRvu(string studyType)
+    partial void OnLastSyncResultChanged(PayrollSyncResult? value)
     {
-        if (_dataManager.RvuTable.TryGetValue(studyType, out var rvu))
-            return rvu;
-
-        foreach (var kvp in _dataManager.RvuTable)
-        {
-            if (kvp.Key.Contains(studyType, StringComparison.OrdinalIgnoreCase) ||
-                studyType.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
-                return kvp.Value;
-        }
-
-        return 1.0;
+        OnPropertyChanged(nameof(CanApplyTimeSync));
     }
 
-    #endregion
-
-    #region Database Operations
+    #region Database Repair
 
     [RelayCommand]
     private async Task ScanDatabase()
@@ -216,58 +148,81 @@ public partial class ToolsViewModel : ObservableObject
                 sb.AppendLine();
 
                 var shifts = _dataManager.Database.GetAllShifts();
-                sb.AppendLine($"Total Shifts: {shifts.Count}");
-
                 var allRecords = _dataManager.Database.GetAllRecords();
-                sb.AppendLine($"Total Studies: {allRecords.Count}");
-                sb.AppendLine($"Total RVU: {allRecords.Sum(r => r.Rvu):F1}");
-                sb.AppendLine();
 
-                // Stats by study type
-                var statsByType = _dataManager.Database.GetStatsByStudyType();
-                sb.AppendLine("BREAKDOWN BY STUDY TYPE:");
-                foreach (var kvp in statsByType.Take(15))
-                {
-                    sb.AppendLine($"  {kvp.Key}: {kvp.Value.Count} studies, {kvp.Value.TotalRvu:F1} RVU");
-                }
-                if (statsByType.Count > 15)
-                {
-                    sb.AppendLine($"  ... and {statsByType.Count - 15} more types");
-                }
-                sb.AppendLine();
-
-                // Check for issues
+                // Check for issues FIRST
                 var orphans = allRecords.Where(r => r.ShiftId == 0).ToList();
-                if (orphans.Any())
-                {
-                    sb.AppendLine($"WARNING: Orphan records (no shift): {orphans.Count}");
-                }
-
                 var duplicates = allRecords.GroupBy(r => r.Accession)
                     .Where(g => g.Count() > 1)
                     .ToList();
-                if (duplicates.Any())
-                {
-                    sb.AppendLine($"WARNING: Duplicate accessions: {duplicates.Count}");
-                }
-
                 var zeroRvu = allRecords.Where(r => r.Rvu == 0).ToList();
-                if (zeroRvu.Any())
-                {
-                    sb.AppendLine($"INFO: Zero-RVU studies: {zeroRvu.Count}");
-                }
-
                 var unknown = allRecords.Where(r => r.StudyType.Contains("Unknown")).ToList();
-                if (unknown.Any())
-                {
-                    sb.AppendLine($"INFO: Unknown study types: {unknown.Count}");
-                }
 
+                var totalIssues = orphans.Count + duplicates.Sum(g => g.Count() - 1) + zeroRvu.Count + unknown.Count;
+
+                sb.AppendLine("─────────────────────────────────");
+                sb.AppendLine("ISSUES FOUND");
+                sb.AppendLine("─────────────────────────────────");
+
+                if (totalIssues == 0)
+                {
+                    sb.AppendLine("  No issues found!");
+                }
+                else
+                {
+                    if (duplicates.Any())
+                    {
+                        var dupCount = duplicates.Sum(g => g.Count() - 1);
+                        sb.AppendLine($"  Duplicate accessions: {duplicates.Count} unique ({dupCount} extra records)");
+                        sb.AppendLine();
+
+                        // List all duplicate records with full details
+                        foreach (var group in duplicates.Take(20))
+                        {
+                            sb.AppendLine($"    Accession: {group.Key.Substring(0, Math.Min(16, group.Key.Length))}...");
+                            foreach (var record in group.OrderBy(r => r.Timestamp))
+                            {
+                                var ts = record.Timestamp.ToString("yyyy-MM-dd HH:mm");
+                                var proc = record.Procedure?.Length > 30
+                                    ? record.Procedure.Substring(0, 30) + "..."
+                                    : record.Procedure ?? "N/A";
+                                sb.AppendLine($"      ID:{record.Id} | {ts} | {record.Rvu:F1} RVU | Shift:{record.ShiftId} | {proc}");
+                            }
+                            sb.AppendLine();
+                        }
+                        if (duplicates.Count > 20)
+                        {
+                            sb.AppendLine($"    ... and {duplicates.Count - 20} more duplicate groups");
+                            sb.AppendLine();
+                        }
+                    }
+                    if (orphans.Any())
+                    {
+                        sb.AppendLine($"  Orphan records (no shift): {orphans.Count}");
+                    }
+                    if (zeroRvu.Any())
+                    {
+                        sb.AppendLine($"  Zero-RVU studies: {zeroRvu.Count}");
+                    }
+                    if (unknown.Any())
+                    {
+                        sb.AppendLine($"  Unknown study types: {unknown.Count}");
+                    }
+                    sb.AppendLine();
+                    sb.AppendLine("  Click 'Fix' to resolve these issues.");
+                }
                 sb.AppendLine();
-                sb.AppendLine("Scan complete.");
+
+                // TOTALS
+                sb.AppendLine("─────────────────────────────────");
+                sb.AppendLine("TOTALS");
+                sb.AppendLine("─────────────────────────────────");
+                sb.AppendLine($"  Shifts: {shifts.Count}");
+                sb.AppendLine($"  Studies: {allRecords.Count}");
+                sb.AppendLine($"  Total RVU: {allRecords.Sum(r => r.Rvu):F1}");
 
                 ReportText = sb.ToString();
-                StatusText = "Scan complete";
+                StatusText = totalIssues > 0 ? $"Found {totalIssues} issues" : "No issues found";
             }
             catch (Exception ex)
             {
@@ -287,6 +242,8 @@ public partial class ToolsViewModel : ObservableObject
         StatusText = "Fixing database...";
         var report = new System.Text.StringBuilder();
         report.AppendLine("=== DATABASE FIX REPORT ===");
+        report.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        report.AppendLine();
 
         await Task.Run(() =>
         {
@@ -295,9 +252,74 @@ public partial class ToolsViewModel : ObservableObject
                 var allRecords = _dataManager.Database.GetAllRecords();
                 int fixedRvuCount = 0;
                 int fixedTypeCount = 0;
+                int duplicatesRemoved = 0;
+                int orphansFixed = 0;
 
-                // 1. Fix Zero RVUs
-                foreach (var record in allRecords.Where(r => r.Rvu == 0))
+                // 1. Remove duplicate accessions (keep the oldest by timestamp)
+                var duplicateGroups = allRecords
+                    .GroupBy(r => r.Accession)
+                    .Where(g => g.Count() > 1)
+                    .ToList();
+
+                foreach (var group in duplicateGroups)
+                {
+                    // Keep the record with the earliest timestamp, delete others
+                    var toKeep = group.OrderBy(r => r.Timestamp).First();
+                    foreach (var record in group.Where(r => r.Id != toKeep.Id))
+                    {
+                        _dataManager.Database.DeleteRecord(record.Id);
+                        duplicatesRemoved++;
+                    }
+                }
+
+                if (duplicatesRemoved > 0)
+                {
+                    report.AppendLine($"DUPLICATES: Removed {duplicatesRemoved} duplicate records");
+                    report.AppendLine($"  (kept oldest record for each accession)");
+                    report.AppendLine();
+                    // Refresh records after deleting duplicates
+                    allRecords = _dataManager.Database.GetAllRecords();
+                }
+
+                // 2. Fix orphan records (shift_id = 0 or invalid)
+                var shifts = _dataManager.Database.GetAllShifts();
+                var orphans = allRecords.Where(r => r.ShiftId == 0).ToList();
+
+                foreach (var orphan in orphans)
+                {
+                    // Find the best shift for this record based on timestamp
+                    var bestShift = shifts
+                        .Where(s => orphan.Timestamp >= s.ShiftStart &&
+                                   (s.ShiftEnd == null || orphan.Timestamp <= s.ShiftEnd.Value.AddHours(2)))
+                        .OrderBy(s => Math.Abs((orphan.Timestamp - s.ShiftStart).TotalMinutes))
+                        .FirstOrDefault();
+
+                    if (bestShift != null)
+                    {
+                        // Update the record's shift_id
+                        _dataManager.Database.AssignRecordToShift(orphan.Id, bestShift.Id);
+                        orphansFixed++;
+                    }
+                    else
+                    {
+                        // No suitable shift found - delete the orphan
+                        _dataManager.Database.DeleteRecord(orphan.Id);
+                        orphansFixed++;
+                    }
+                }
+
+                if (orphansFixed > 0)
+                {
+                    report.AppendLine($"ORPHANS: Fixed {orphansFixed} orphan records");
+                    report.AppendLine($"  (assigned to matching shifts or deleted)");
+                    report.AppendLine();
+                    // Refresh records
+                    allRecords = _dataManager.Database.GetAllRecords();
+                }
+
+                // 3. Fix Zero RVUs
+                var zeroRvuRecords = allRecords.Where(r => r.Rvu == 0).ToList();
+                foreach (var record in zeroRvuRecords)
                 {
                     if (_dataManager.RvuTable.TryGetValue(record.StudyType, out var rvu) && rvu > 0)
                     {
@@ -308,12 +330,15 @@ public partial class ToolsViewModel : ObservableObject
                 }
 
                 if (fixedRvuCount > 0)
-                    report.AppendLine($"Fixed {fixedRvuCount} studies with 0 RVU.");
-                else
-                    report.AppendLine("No Zero-RVU studies could be fixed.");
+                {
+                    report.AppendLine($"ZERO RVU: Fixed {fixedRvuCount} records with 0 RVU");
+                    report.AppendLine($"  (looked up RVU from study type)");
+                    report.AppendLine();
+                }
 
-                // 2. Re-classify Unknown study types
-                foreach (var record in allRecords.Where(r => r.StudyType == "Unknown" && !string.IsNullOrEmpty(r.Procedure)))
+                // 4. Re-classify Unknown study types
+                var unknownRecords = allRecords.Where(r => r.StudyType == "Unknown" && !string.IsNullOrEmpty(r.Procedure)).ToList();
+                foreach (var record in unknownRecords)
                 {
                     var (studyType, rvu) = StudyMatcher.MatchStudyType(
                         record.Procedure,
@@ -330,13 +355,28 @@ public partial class ToolsViewModel : ObservableObject
                 }
 
                 if (fixedTypeCount > 0)
-                    report.AppendLine($"Re-classified {fixedTypeCount} Unknown studies.");
+                {
+                    report.AppendLine($"UNKNOWN TYPES: Re-classified {fixedTypeCount} records");
+                    report.AppendLine($"  (matched procedure text to study types)");
+                    report.AppendLine();
+                }
 
-                report.AppendLine("Fix complete.");
+                // Summary
+                report.AppendLine("─────────────────────────────────");
+                var totalFixed = duplicatesRemoved + orphansFixed + fixedRvuCount + fixedTypeCount;
+                if (totalFixed == 0)
+                {
+                    report.AppendLine("No issues found to fix.");
+                }
+                else
+                {
+                    report.AppendLine($"TOTAL: {totalFixed} issues fixed");
+                }
+
                 ReportText = report.ToString();
                 LoadDatabaseStats();
                 _onDatabaseChanged?.Invoke();
-                StatusText = "Fix complete";
+                StatusText = totalFixed > 0 ? $"Fixed {totalFixed} issues" : "No issues to fix";
             }
             catch (Exception ex)
             {
@@ -349,62 +389,55 @@ public partial class ToolsViewModel : ObservableObject
         IsProcessing = false;
     }
 
-    /// <summary>
-    /// Full database repair using DatabaseRepair class (Python parity).
-    /// Finds all records where study_type or RVU don't match current rules and fixes them.
-    /// </summary>
     [RelayCommand]
-    private async Task RepairDatabase()
+    private void ViewLogs()
     {
-        IsProcessing = true;
-        Progress = 0;
-        StatusText = "Scanning for mismatches...";
-
-        var progressReporter = new Progress<(string Status, double Percent)>(p =>
+        var logDir = Path.Combine(AppContext.BaseDirectory, "logs");
+        if (Directory.Exists(logDir))
         {
-            StatusText = p.Status;
-            Progress = (int)(p.Percent * 100);
-        });
-
-        var result = await _databaseRepair.RepairDatabaseAsync(progressReporter);
-
-        var report = new System.Text.StringBuilder();
-        report.AppendLine("=== DATABASE REPAIR REPORT ===");
-        report.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        report.AppendLine();
-
-        if (result.Success)
-        {
-            report.AppendLine($"Mismatches Found: {result.MismatchesFound}");
-            report.AppendLine($"Records Fixed: {result.RecordsFixed}");
-            report.AppendLine();
-
-            if (result.MismatchesFound == 0)
-            {
-                report.AppendLine("All records match current RVU rules.");
-            }
-            else
-            {
-                report.AppendLine("All mismatches have been corrected to match current rules.");
-            }
-
-            LoadDatabaseStats();
-            _onDatabaseChanged?.Invoke();
-            StatusText = $"Repair complete: {result.RecordsFixed} records fixed";
+            System.Diagnostics.Process.Start("explorer.exe", logDir);
         }
         else
         {
-            report.AppendLine($"ERROR: {result.ErrorMessage}");
-            StatusText = "Repair failed";
+            StatusText = "Log directory not found";
         }
+    }
 
-        ReportText = report.ToString();
-        IsProcessing = false;
+    [RelayCommand]
+    private void OpenDatabaseFolder()
+    {
+        try
+        {
+            var dbPath = _dataManager.DatabasePath;
+            if (!string.IsNullOrEmpty(dbPath) && File.Exists(dbPath))
+            {
+                var dir = Path.GetDirectoryName(dbPath);
+                if (dir != null && Directory.Exists(dir))
+                {
+                    // Use ProcessStartInfo with UseShellExecute for proper Explorer opening
+                    var psi = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{dir}\"",
+                        UseShellExecute = true
+                    };
+                    System.Diagnostics.Process.Start(psi);
+                    StatusText = $"Opened: {dir}";
+                    return;
+                }
+            }
+            StatusText = $"Database folder not found. Path: {dbPath ?? "unknown"}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Error opening folder: {ex.Message}";
+            Log.Error(ex, "Error opening database folder");
+        }
     }
 
     #endregion
 
-    #region Excel Audit
+    #region Payroll Reconciliation
 
     [RelayCommand]
     private void BrowseExcelFile()
@@ -418,12 +451,99 @@ public partial class ToolsViewModel : ObservableObject
         if (dialog.ShowDialog() == true)
         {
             ExcelFilePath = dialog.FileName;
-            StatusText = $"Selected: {Path.GetFileName(dialog.FileName)}";
+            // Clear previous results when new file selected
+            LastAuditResult = null;
+            LastSyncResult = null;
+            ReportText = "";
+
+            // Try to auto-detect date range from filename
+            var (startDate, endDate) = ParseDateRangeFromFilename(dialog.FileName);
+            if (startDate.HasValue && endDate.HasValue)
+            {
+                AuditStartDate = startDate.Value;
+                AuditEndDate = endDate.Value;
+                StatusText = $"Selected: {Path.GetFileName(dialog.FileName)} ({startDate.Value:MMM yyyy})";
+            }
+            else
+            {
+                StatusText = $"Selected: {Path.GetFileName(dialog.FileName)}";
+            }
         }
     }
 
+    /// <summary>
+    /// Parse date range from filename. Supports formats like:
+    /// - "2026-01 Payroll.xlsx" (year-month)
+    /// - "Jan-26 Report.xlsx" (month-year)
+    /// - "January 2026.xlsx" (full month name)
+    /// </summary>
+    private (DateTime? Start, DateTime? End) ParseDateRangeFromFilename(string filePath)
+    {
+        var filename = Path.GetFileNameWithoutExtension(filePath);
+
+        // Month name mapping
+        var monthMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            {"jan", 1}, {"january", 1}, {"feb", 2}, {"february", 2},
+            {"mar", 3}, {"march", 3}, {"apr", 4}, {"april", 4},
+            {"may", 5}, {"jun", 6}, {"june", 6}, {"jul", 7}, {"july", 7},
+            {"aug", 8}, {"august", 8}, {"sep", 9}, {"sept", 9}, {"september", 9},
+            {"oct", 10}, {"october", 10}, {"nov", 11}, {"november", 11},
+            {"dec", 12}, {"december", 12}
+        };
+
+        // Try pattern: "2026-01" or "2026-1" at start
+        var yearMonthMatch = System.Text.RegularExpressions.Regex.Match(
+            filename, @"^(\d{4})-(\d{1,2})");
+        if (yearMonthMatch.Success)
+        {
+            var year = int.Parse(yearMonthMatch.Groups[1].Value);
+            var month = int.Parse(yearMonthMatch.Groups[2].Value);
+            if (month >= 1 && month <= 12)
+            {
+                var start = new DateTime(year, month, 1);
+                var end = start.AddMonths(1).AddDays(-1);
+                return (start, end);
+            }
+        }
+
+        // Try pattern: "Jan-26" or "Jan-2026"
+        var monthYearMatch = System.Text.RegularExpressions.Regex.Match(
+            filename, @"^([A-Za-z]+)-(\d{2,4})", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (monthYearMatch.Success)
+        {
+            var monthStr = monthYearMatch.Groups[1].Value;
+            var yearStr = monthYearMatch.Groups[2].Value;
+            if (monthMap.TryGetValue(monthStr, out var month))
+            {
+                var year = int.Parse(yearStr);
+                if (year < 100) year += 2000;
+                var start = new DateTime(year, month, 1);
+                var end = start.AddMonths(1).AddDays(-1);
+                return (start, end);
+            }
+        }
+
+        // Try pattern: "January 2026" anywhere in filename
+        foreach (var (monthName, monthNum) in monthMap)
+        {
+            var pattern = $@"{monthName}\s*(\d{{4}})";
+            var match = System.Text.RegularExpressions.Regex.Match(
+                filename, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                var year = int.Parse(match.Groups[1].Value);
+                var start = new DateTime(year, monthNum, 1);
+                var end = start.AddMonths(1).AddDays(-1);
+                return (start, end);
+            }
+        }
+
+        return (null, null);
+    }
+
     [RelayCommand]
-    private async Task RunExcelAudit()
+    private async Task RunAudit()
     {
         if (string.IsNullOrEmpty(ExcelFilePath) || !File.Exists(ExcelFilePath))
         {
@@ -433,7 +553,7 @@ public partial class ToolsViewModel : ObservableObject
 
         IsProcessing = true;
         Progress = 0;
-        StatusText = "Running Excel audit...";
+        StatusText = "Auditing accessions...";
 
         var progressReporter = new Progress<int>(p => Progress = p);
 
@@ -446,7 +566,7 @@ public partial class ToolsViewModel : ObservableObject
         if (LastAuditResult.Success)
         {
             ReportText = _excelChecker.GenerateReportText(LastAuditResult);
-            StatusText = $"Audit complete: {LastAuditResult.Matched} matched, {LastAuditResult.MissingFromDb} missing";
+            StatusText = $"Audit: {LastAuditResult.Matched} matched, {LastAuditResult.MissingFromDb} missing, {LastAuditResult.ExtraInDb} extra";
         }
         else
         {
@@ -457,12 +577,8 @@ public partial class ToolsViewModel : ObservableObject
         IsProcessing = false;
     }
 
-    /// <summary>
-    /// Check Excel file for RVU outliers (Python parity: check_file).
-    /// Compares StandardProcedureName/wRVU_Matrix against current rules.
-    /// </summary>
     [RelayCommand]
-    private async Task CheckExcelRvu()
+    private async Task CheckRvu()
     {
         if (string.IsNullOrEmpty(ExcelFilePath) || !File.Exists(ExcelFilePath))
         {
@@ -484,7 +600,7 @@ public partial class ToolsViewModel : ObservableObject
         if (result.Success)
         {
             ReportText = _excelChecker.GenerateReportText(result);
-            StatusText = $"Check complete: {result.Outliers.Count} outliers found in {result.TotalProcessed} records";
+            StatusText = $"RVU Check: {result.Outliers.Count} outliers in {result.TotalProcessed} records";
         }
         else
         {
@@ -495,9 +611,59 @@ public partial class ToolsViewModel : ObservableObject
         IsProcessing = false;
     }
 
-    #endregion
+    [RelayCommand]
+    private async Task ReconcileDatabase()
+    {
+        if (LastAuditResult == null || !LastAuditResult.Success)
+        {
+            StatusText = "Please run audit first";
+            return;
+        }
 
-    #region Payroll Sync
+        if (!CanReconcile)
+        {
+            StatusText = "Nothing to reconcile - no missing or extra records";
+            return;
+        }
+
+        IsProcessing = true;
+        Progress = 0;
+        StatusText = "Reconciling database...";
+
+        var progressReporter = new Progress<(string Status, int Percent)>(p =>
+        {
+            StatusText = p.Status;
+            Progress = p.Percent;
+        });
+
+        var result = await _excelChecker.ReconcileDatabaseAsync(LastAuditResult, progressReporter);
+
+        if (result.Success)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("=== RECONCILIATION COMPLETE ===");
+            sb.AppendLine($"Records Deleted: {result.RecordsDeleted}");
+            sb.AppendLine($"Records Added: {result.RecordsAdded}");
+            sb.AppendLine($"Shifts Created: {result.ShiftsCreated}");
+            sb.AppendLine();
+            sb.AppendLine("Run audit again to verify changes.");
+
+            ReportText = sb.ToString();
+            StatusText = result.Message;
+            LoadDatabaseStats();
+            _onDatabaseChanged?.Invoke();
+
+            // Clear audit result to force re-run
+            LastAuditResult = null;
+        }
+        else
+        {
+            ReportText = $"Reconciliation failed: {result.ErrorMessage}";
+            StatusText = "Reconciliation failed";
+        }
+
+        IsProcessing = false;
+    }
 
     [RelayCommand]
     private void DetectTimeOffset()
@@ -562,139 +728,163 @@ public partial class ToolsViewModel : ObservableObject
         IsProcessing = false;
     }
 
+    [RelayCommand]
+    private void ExportReport()
+    {
+        if (string.IsNullOrEmpty(ReportText))
+        {
+            StatusText = "No report to export";
+            return;
+        }
+
+        var defaultName = !string.IsNullOrEmpty(ExcelFilePath)
+            ? Path.GetFileNameWithoutExtension(ExcelFilePath) + "_report.txt"
+            : $"rvu_report_{DateTime.Now:yyyyMMdd}.txt";
+
+        var dialog = new SaveFileDialog
+        {
+            Filter = "Text Files|*.txt|All Files|*.*",
+            FileName = defaultName,
+            Title = "Export Report"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            try
+            {
+                File.WriteAllText(dialog.FileName, ReportText);
+                StatusText = $"Report exported to {Path.GetFileName(dialog.FileName)}";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Export failed: {ex.Message}";
+            }
+        }
+    }
+
     #endregion
 
-    #region Backup
+    #region Backup & Restore
 
     [RelayCommand]
-    private async Task CreateBackup()
+    private async Task ExportDatabase()
     {
-        IsProcessing = true;
-        StatusText = "Creating backup...";
-
-        var result = await _backupManager.CreateBackupAsync("manual");
-
-        if (result.Success)
+        var dialog = new SaveFileDialog
         {
-            StatusText = $"Backup created: {Path.GetFileName(result.BackupPath ?? "")}";
-            LoadBackupStatus();
-        }
-        else
-        {
-            StatusText = $"Backup failed: {result.Message}";
-        }
-
-        IsProcessing = false;
-    }
-
-    [RelayCommand]
-    private void ViewBackups()
-    {
-        var backupFolder = _backupManager.GetOneDriveBackupFolder();
-        if (!string.IsNullOrEmpty(backupFolder) && Directory.Exists(backupFolder))
-        {
-            System.Diagnostics.Process.Start("explorer.exe", backupFolder);
-        }
-        else
-        {
-            StatusText = "Backup folder not found";
-        }
-    }
-
-    [RelayCommand]
-    private async Task RestoreBackup()
-    {
-        var dialog = new OpenFileDialog
-        {
-            Filter = "Database Files|*.db|All Files|*.*",
-            Title = "Select Backup to Restore",
-            InitialDirectory = _backupManager.GetOneDriveBackupFolder() ?? ""
+            Filter = "SQLite Database|*.db|All Files|*.*",
+            FileName = $"rvu_counter_backup_{DateTime.Now:yyyyMMdd}.db",
+            Title = "Export Database"
         };
 
         if (dialog.ShowDialog() == true)
         {
             IsProcessing = true;
-            StatusText = "Restoring backup...";
+            StatusText = "Exporting database...";
 
-            var (success, message) = await _backupManager.RestoreFromBackupAsync(dialog.FileName);
-
-            StatusText = message;
-            if (success)
+            try
             {
-                LoadDatabaseStats();
-                _onDatabaseChanged?.Invoke();
+                var sourcePath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "RVUCounter", "database.db");
+
+                if (File.Exists(sourcePath))
+                {
+                    await Task.Run(() => File.Copy(sourcePath, dialog.FileName, overwrite: true));
+                    StatusText = $"Database exported to {Path.GetFileName(dialog.FileName)}";
+                }
+                else
+                {
+                    StatusText = "Database file not found";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Export failed: {ex.Message}";
             }
 
             IsProcessing = false;
         }
     }
 
-    #endregion
-
-    #region Utilities
-
     [RelayCommand]
-    private void ViewLogs()
+    private async Task ExportSettings()
     {
-        var logDir = Path.Combine(AppContext.BaseDirectory, "logs");
-        if (Directory.Exists(logDir))
+        var dialog = new SaveFileDialog
         {
-            System.Diagnostics.Process.Start("explorer.exe", logDir);
-        }
-        else
-        {
-            StatusText = "Log directory not found";
-        }
-    }
+            Filter = "YAML File|*.yaml|All Files|*.*",
+            FileName = $"rvu_counter_settings_{DateTime.Now:yyyyMMdd}.yaml",
+            Title = "Export Settings"
+        };
 
-    [RelayCommand]
-    private void OpenDatabase()
-    {
-        var dbPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "RVUCounter", "database.db");
-        if (File.Exists(dbPath))
+        if (dialog.ShowDialog() == true)
         {
-            var dir = Path.GetDirectoryName(dbPath);
-            if (dir != null)
+            IsProcessing = true;
+            StatusText = "Exporting settings...";
+
+            try
             {
-                System.Diagnostics.Process.Start("explorer.exe", dir);
+                var sourcePath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "RVUCounter", "user_settings.yaml");
+
+                if (File.Exists(sourcePath))
+                {
+                    await Task.Run(() => File.Copy(sourcePath, dialog.FileName, overwrite: true));
+                    StatusText = $"Settings exported to {Path.GetFileName(dialog.FileName)}";
+                }
+                else
+                {
+                    StatusText = "Settings file not found";
+                }
             }
+            catch (Exception ex)
+            {
+                StatusText = $"Export failed: {ex.Message}";
+            }
+
+            IsProcessing = false;
         }
-        else
+    }
+
+    [RelayCommand]
+    private async Task ImportDatabase()
+    {
+        var dialog = new OpenFileDialog
         {
-            StatusText = "Database file not found";
+            Filter = "SQLite Database|*.db|All Files|*.*",
+            Title = "Import Database"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            IsProcessing = true;
+            StatusText = "Importing database...";
+
+            try
+            {
+                var destPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "RVUCounter", "database.db");
+
+                // Create backup of current
+                if (File.Exists(destPath))
+                {
+                    var backupPath = destPath + $".backup_{DateTime.Now:yyyyMMddHHmmss}";
+                    await Task.Run(() => File.Move(destPath, backupPath));
+                }
+
+                await Task.Run(() => File.Copy(dialog.FileName, destPath));
+                StatusText = "Database imported. Please restart the application.";
+                LoadDatabaseStats();
+                _onDatabaseChanged?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Import failed: {ex.Message}";
+            }
+
+            IsProcessing = false;
         }
-    }
-
-    /// <summary>
-    /// Get list of common study types for autocomplete.
-    /// </summary>
-    public List<string> GetStudyTypes()
-    {
-        return _dataManager.RvuTable.Keys.OrderBy(k => k).ToList();
-    }
-
-    /// <summary>
-    /// Get list of shifts for dropdown.
-    /// </summary>
-    public List<Shift> GetShifts()
-    {
-        var shifts = new List<Shift>();
-
-        var current = _dataManager.Database.GetCurrentShift();
-        if (current != null)
-            shifts.Add(current);
-
-        shifts.AddRange(_dataManager.Database.GetAllShifts().Take(20));
-        return shifts;
-    }
-
-    /// <summary>
-    /// Get backup history.
-    /// </summary>
-    public List<BackupInfo> GetBackupHistory()
-    {
-        return _backupManager.GetBackupHistory();
     }
 
     #endregion

@@ -83,6 +83,12 @@ public class StudyRecord
     public string? MultiAccessionGroup { get; set; }
 
     /// <summary>
+    /// Whether this study had a critical result communicated
+    /// (from MosaicTools integration)
+    /// </summary>
+    public bool HasCriticalResult { get; set; }
+
+    /// <summary>
     /// Create a copy of this record
     /// </summary>
     public StudyRecord Clone()
@@ -103,7 +109,8 @@ public class StudyRecord
             Metadata = Metadata,
             DurationSeconds = DurationSeconds,
             FromMultiAccession = FromMultiAccession,
-            MultiAccessionGroup = MultiAccessionGroup
+            MultiAccessionGroup = MultiAccessionGroup,
+            HasCriticalResult = HasCriticalResult
         };
     }
 }

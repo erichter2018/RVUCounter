@@ -11,13 +11,19 @@ namespace RVUCounter.Logic;
 public class StudyTracker
 {
     private readonly Dictionary<string, TrackedStudy> _activeStudies = new();
-    private readonly HashSet<string> _seenAccessions = new();
+    private readonly Dictionary<string, DateTime> _seenAccessions = new();
+    private int _seenAccessionsCheckCount = 0;
+    private readonly Dictionary<string, int> _missCount = new();
     private readonly int _minSecondsToCount;
+    private readonly int _missesBeforeComplete;
     private readonly object _lock = new();
 
-    public StudyTracker(int minSecondsToCount = 10)
+    /// <param name="minSecondsToCount">Minimum seconds a study must be tracked before it counts as completed.</param>
+    /// <param name="missesBeforeComplete">Number of consecutive scan cycles a study must be absent before it is considered completed. Prevents transient extraction failures from prematurely completing studies.</param>
+    public StudyTracker(int minSecondsToCount = 10, int missesBeforeComplete = 3)
     {
         _minSecondsToCount = minSecondsToCount;
+        _missesBeforeComplete = missesBeforeComplete;
     }
 
     /// <summary>
@@ -60,12 +66,22 @@ public class StudyTracker
                     var (studyType, rvu) = StudyMatcher.MatchStudyType(
                         procedure, rvuTable, classificationRules);
 
-                    existing.Procedure = procedure;
-                    existing.StudyType = studyType;
-                    existing.Rvu = rvu;
+                    // Only overwrite if new procedure classifies to a known study type
+                    // This prevents garbage text from corrupting a valid study
+                    if (studyType != "Unknown")
+                    {
+                        existing.Procedure = procedure;
+                        existing.StudyType = studyType;
+                        existing.Rvu = rvu;
 
-                    Log.Information("Updated study procedure and type: {Accession} - {StudyType} ({Rvu} RVU) (was: {OldType})",
-                        accession, studyType, rvu, existingStudyType);
+                        Log.Information("Updated study procedure and type: {Accession} - {StudyType} ({Rvu} RVU) (was: {OldType})",
+                            accession, studyType, rvu, existingStudyType);
+                    }
+                    else
+                    {
+                        Log.Debug("Skipped procedure overwrite for {Accession}: new procedure '{Procedure}' classifies as Unknown",
+                            accession, procedure);
+                    }
                 }
             }
             else
@@ -99,6 +115,10 @@ public class StudyTracker
 
     /// <summary>
     /// Check for studies that have disappeared (completed).
+    /// Studies must be absent for multiple consecutive scan cycles before being considered
+    /// completed, to prevent transient extraction failures from causing premature completion.
+    /// When a different accession is explicitly visible, the study completes immediately
+    /// (the user has clearly moved on).
     /// </summary>
     public List<TrackedStudy> CheckCompleted(DateTime currentTime, string currentAccession = "")
     {
@@ -115,30 +135,44 @@ public class StudyTracker
                 var accession = kvp.Key;
                 var study = kvp.Value;
 
-                // If this accession is currently visible, it's not completed
+                // If this accession is currently visible, it's not completed — reset miss count
                 if (accession == currentAccession)
                 {
+                    _missCount.Remove(accession);
                     Log.Debug("CheckCompleted: {Accession} is currently visible, skipping", accession);
                     continue;
                 }
 
-                // Study is considered completed if:
-                // 1. A different study is now visible (current_accession is set and different), OR
-                // 2. No study is visible (current_accession is empty) - complete immediately
                 bool shouldComplete = false;
 
                 if (!string.IsNullOrEmpty(currentAccession))
                 {
-                    // Different study is visible - this one is completed
+                    // A different study is explicitly visible — the user moved on.
+                    // Complete immediately (no grace period needed).
                     shouldComplete = true;
+                    _missCount.Remove(accession);
                     Log.Debug("CheckCompleted: {Accession} should complete - different study '{CurrentAccession}' is visible",
                         accession, currentAccession);
                 }
                 else
                 {
-                    // No study is visible - complete immediately
-                    shouldComplete = true;
-                    Log.Debug("CheckCompleted: {Accession} should complete - no study visible", accession);
+                    // No study visible (empty accession) — could be a transient extraction failure.
+                    // Require multiple consecutive misses before completing.
+                    var misses = _missCount.GetValueOrDefault(accession, 0) + 1;
+                    _missCount[accession] = misses;
+
+                    if (misses >= _missesBeforeComplete)
+                    {
+                        shouldComplete = true;
+                        _missCount.Remove(accession);
+                        Log.Debug("CheckCompleted: {Accession} should complete - absent for {Misses} consecutive scans",
+                            accession, misses);
+                    }
+                    else
+                    {
+                        Log.Debug("CheckCompleted: {Accession} not visible, miss {Misses}/{Required} - waiting",
+                            accession, misses, _missesBeforeComplete);
+                    }
                 }
 
                 if (shouldComplete)
@@ -162,7 +196,7 @@ public class StudyTracker
                     }
                     else
                     {
-                        Log.Debug("Ignored short study: {Accession} ({Duration:F1}s < {Min}s)",
+                        Log.Information("Dropped short study: {Accession} ({Duration:F1}s < {Min}s threshold)",
                             accession, duration, _minSecondsToCount);
                     }
 
@@ -174,6 +208,7 @@ public class StudyTracker
             foreach (var accession in toRemove)
             {
                 _activeStudies.Remove(accession);
+                _missCount.Remove(accession);
             }
         }
 
@@ -309,9 +344,28 @@ public class StudyTracker
 
         lock (_lock)
         {
-            // Check in-memory cache first (faster)
-            if (_seenAccessions.Contains(accession))
-                return true;
+            // Check in-memory cache first (faster) with 30-minute TTL
+            if (_seenAccessions.TryGetValue(accession, out var seenTime))
+            {
+                if ((DateTime.Now - seenTime).TotalMinutes < 30)
+                    return true;
+                else
+                    _seenAccessions.Remove(accession); // Expired
+            }
+
+            // Periodic cleanup of all expired entries (every 100 checks)
+            _seenAccessionsCheckCount++;
+            if (_seenAccessionsCheckCount >= 100)
+            {
+                _seenAccessionsCheckCount = 0;
+                var now = DateTime.Now;
+                var expired = _seenAccessions
+                    .Where(kvp => (now - kvp.Value).TotalMinutes >= 30)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+                foreach (var key in expired)
+                    _seenAccessions.Remove(key);
+            }
         }
 
         // Check database for duplicates in current shift
@@ -326,10 +380,10 @@ public class StudyTracker
                     var dbRecord = dataManager.Database.FindRecordByAccession(currentShift.Id, hashedAccession);
                     if (dbRecord != null)
                     {
-                        // Add to memory cache
+                        // Add to memory cache with current timestamp
                         lock (_lock)
                         {
-                            _seenAccessions.Add(accession);
+                            _seenAccessions[accession] = DateTime.Now;
                         }
                         return true;
                     }
@@ -429,7 +483,7 @@ public class StudyTracker
         {
             lock (_lock)
             {
-                _seenAccessions.Add(accession);
+                _seenAccessions[accession] = DateTime.Now;
             }
         }
     }
@@ -441,7 +495,7 @@ public class StudyTracker
     {
         lock (_lock)
         {
-            return new HashSet<string>(_seenAccessions);
+            return new HashSet<string>(_seenAccessions.Keys);
         }
     }
 
@@ -455,6 +509,7 @@ public class StudyTracker
             if (_activeStudies.TryGetValue(accession, out var study))
             {
                 _activeStudies.Remove(accession);
+                _missCount.Remove(accession);
                 study.CompletedAt = DateTime.Now;
                 study.Duration = (study.CompletedAt.Value - study.FirstSeen).TotalSeconds;
                 return study;
@@ -508,6 +563,7 @@ public class StudyTracker
         {
             _activeStudies.Clear();
             _seenAccessions.Clear();
+            _missCount.Clear();
         }
     }
 

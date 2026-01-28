@@ -50,6 +50,12 @@ public class TeamMemberStats
     /// </summary>
     [JsonPropertyName("shift_duration_mins")]
     public int ShiftDurationMins { get; set; }
+
+    /// <summary>
+    /// Percentage of studies that are inpatient stat
+    /// </summary>
+    [JsonPropertyName("inpatient_stat_pct")]
+    public double InpatientStatPct { get; set; }
 }
 
 /// <summary>
@@ -109,8 +115,11 @@ public class TeamMemberDisplay
 {
     public double TotalRvu { get; set; }
     public double RvuPerHour { get; set; }
+    public double InpatientStatPct { get; set; }
     public double DisplayValue { get; set; }  // Current display value (rate or total based on mode)
     public double PositionPercent { get; set; }  // Position on number line (0.0-1.0)
     public bool IsYou { get; set; }
-    public string DisplayText => IsYou ? $"You: {DisplayValue:F1}" : $"{DisplayValue:F1}";
+    public string DisplayText => IsYou
+        ? $"You: {DisplayValue:F1} | IP Stat: {InpatientStatPct:F0}%"
+        : $"{DisplayValue:F1} | IP Stat: {InpatientStatPct:F0}%";
 }

@@ -22,6 +22,7 @@ public class ExcelChecker
     /// <summary>
     /// Check Excel file for RVU outliers (Python parity: check_file).
     /// Uses StandardProcedureName and wRVU_Matrix columns.
+    /// Searches all worksheets to find the one with required columns.
     /// </summary>
     public ExcelRvuCheckResult CheckFile(string filePath, IProgress<(int Current, int Total)>? progress = null)
     {
@@ -30,28 +31,45 @@ public class ExcelChecker
         try
         {
             using var workbook = new XLWorkbook(filePath);
-            var sheet = workbook.Worksheets.FirstOrDefault();
-            if (sheet == null)
+            if (workbook.Worksheets.Count == 0)
             {
                 result.ErrorMessage = "No worksheets found";
                 return result;
             }
 
-            // Find columns by exact name (Python parity)
+            // Search all worksheets for the one with required columns
+            IXLWorksheet? sheet = null;
             int? procCol = null, rvuCol = null;
-            var headers = new List<string>();
+            var allHeaders = new List<string>();
 
-            for (int col = 1; col <= sheet.LastColumnUsed()?.ColumnNumber(); col++)
+            foreach (var ws in workbook.Worksheets)
             {
-                var header = sheet.Cell(1, col).GetString();
-                headers.Add(header);
-                if (header == "StandardProcedureName") procCol = col;
-                else if (header == "wRVU_Matrix") rvuCol = col;
+                procCol = null;
+                rvuCol = null;
+                var headers = new List<string>();
+
+                var lastCol = ws.LastColumnUsed()?.ColumnNumber() ?? 1;
+                for (int col = 1; col <= Math.Min(lastCol, 50); col++)
+                {
+                    var header = ws.Cell(1, col).GetString();
+                    headers.Add(header);
+                    if (header == "StandardProcedureName") procCol = col;
+                    else if (header == "wRVU_Matrix") rvuCol = col;
+                }
+
+                if (procCol != null && rvuCol != null)
+                {
+                    sheet = ws;
+                    Log.Information("Found RVU columns in worksheet: {SheetName}", ws.Name);
+                    break;
+                }
+
+                allHeaders.AddRange(headers);
             }
 
-            if (procCol == null || rvuCol == null)
+            if (sheet == null || procCol == null || rvuCol == null)
             {
-                result.ErrorMessage = "Missing required columns: StandardProcedureName, wRVU_Matrix";
+                result.ErrorMessage = $"Missing required columns: StandardProcedureName, wRVU_Matrix. Found headers: {string.Join(", ", allHeaders.Take(20))}";
                 return result;
             }
 
@@ -325,35 +343,49 @@ public class ExcelChecker
             var dbRecords = _dataManager.Database.GetRecordsInDateRange(result.StartDate, result.EndDate);
             result.TotalDb = dbRecords.Count;
 
-            // Compare accessions
-            var excelAccessions = excelRecords
-                .Select(r => NormalizeAccession(r.Accession))
-                .Where(a => !string.IsNullOrEmpty(a))
-                .ToHashSet();
+            // Compare accessions - hash Excel accessions to match HIPAA-hashed DB accessions
+            // Create a mapping from hashed accession -> raw accession for lookup
+            var excelHashToRaw = new Dictionary<string, string>();
+            foreach (var record in excelRecords)
+            {
+                var raw = record.Accession;
+                if (!string.IsNullOrEmpty(raw))
+                {
+                    var hashed = _dataManager.HashAccession(raw);
+                    excelHashToRaw[hashed] = raw;
+                }
+            }
+
+            var excelHashedAccessions = excelHashToRaw.Keys.ToHashSet();
 
             var dbAccessions = dbRecords
-                .Select(r => NormalizeAccession(r.Accession))
+                .Select(r => r.Accession) // DB accessions are already hashed
                 .Where(a => !string.IsNullOrEmpty(a))
                 .ToHashSet();
 
-            // Find discrepancies
-            var missingFromDb = excelAccessions.Except(dbAccessions).ToList();
-            var extraInDb = dbAccessions.Except(excelAccessions).ToList();
-            var matched = excelAccessions.Intersect(dbAccessions).ToList();
+            // Find discrepancies using hashed accessions
+            var missingHashedFromDb = excelHashedAccessions.Except(dbAccessions).ToList();
+            var extraInDb = dbAccessions.Except(excelHashedAccessions).ToList();
+            var matchedHashed = excelHashedAccessions.Intersect(dbAccessions).ToList();
 
-            result.Matched = matched.Count;
-            result.MissingFromDb = missingFromDb.Count;
+            result.Matched = matchedHashed.Count;
+            result.MissingFromDb = missingHashedFromDb.Count;
             result.ExtraInDb = extraInDb.Count;
 
-            // Get details for missing records
+            // Get details for missing records (convert back to raw accession for display)
+            var missingRawAccessions = missingHashedFromDb
+                .Where(h => excelHashToRaw.ContainsKey(h))
+                .Select(h => excelHashToRaw[h])
+                .ToHashSet();
+
             result.MissingFromDbDetails = excelRecords
-                .Where(r => missingFromDb.Contains(NormalizeAccession(r.Accession)))
+                .Where(r => missingRawAccessions.Contains(r.Accession))
                 .OrderBy(r => r.Timestamp)
                 .ToList();
 
             // Get details for extra records
             result.ExtraInDbDetails = dbRecords
-                .Where(r => extraInDb.Contains(NormalizeAccession(r.Accession)))
+                .Where(r => extraInDb.Contains(r.Accession))
                 .OrderBy(r => r.Timestamp)
                 .ToList();
 
@@ -383,12 +415,54 @@ public class ExcelChecker
         var records = new List<ExcelRecord>();
 
         using var workbook = new XLWorkbook(path);
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        if (worksheet == null)
+
+        if (workbook.Worksheets.Count == 0)
         {
             Log.Warning("No worksheets found in Excel file");
             return records;
         }
+
+        // Find the worksheet with ExamAccession column (the detail data sheet)
+        IXLWorksheet? worksheet = null;
+        foreach (var ws in workbook.Worksheets)
+        {
+            // Check first row for ExamAccession column
+            var lastCol = ws.LastColumnUsed()?.ColumnNumber() ?? 1;
+            for (int col = 1; col <= Math.Min(lastCol, 50); col++)
+            {
+                var header = ws.Cell(1, col).GetString();
+                if (header.Equals("ExamAccession", StringComparison.OrdinalIgnoreCase))
+                {
+                    worksheet = ws;
+                    Log.Information("Found ExamAccession column in worksheet: {SheetName}", ws.Name);
+                    break;
+                }
+            }
+            if (worksheet != null) break;
+
+            // Also check row 2 in case headers are there
+            for (int col = 1; col <= Math.Min(lastCol, 50); col++)
+            {
+                var header = ws.Cell(2, col).GetString();
+                if (header.Equals("ExamAccession", StringComparison.OrdinalIgnoreCase))
+                {
+                    worksheet = ws;
+                    Log.Information("Found ExamAccession column in worksheet (row 2): {SheetName}", ws.Name);
+                    break;
+                }
+            }
+            if (worksheet != null) break;
+        }
+
+        // Fallback to first worksheet if ExamAccession not found
+        if (worksheet == null)
+        {
+            worksheet = workbook.Worksheets.First();
+            Log.Warning("ExamAccession column not found in any worksheet, using first: {SheetName}", worksheet.Name);
+        }
+
+        Log.Information("Excel file has {SheetCount} worksheets, using: {SheetName}",
+            workbook.Worksheets.Count, worksheet.Name);
 
         // Find header row and column mapping
         var headerRow = FindHeaderRow(worksheet);
@@ -398,15 +472,32 @@ public class ExcelChecker
             return records;
         }
 
+        Log.Information("Header row found at row {Row}", headerRow.Value);
+
         var columnMap = MapColumns(worksheet, headerRow.Value);
+
+        Log.Information("Column mapping: accession={Acc}, procedure={Proc}, timestamp={Time}, rvu={Rvu}",
+            columnMap.GetValueOrDefault("accession", -1),
+            columnMap.GetValueOrDefault("procedure", -1),
+            columnMap.GetValueOrDefault("timestamp", -1),
+            columnMap.GetValueOrDefault("rvu", -1));
+
         if (!columnMap.ContainsKey("accession"))
         {
-            Log.Warning("Could not find accession column in Excel file");
+            // Log all headers for debugging
+            var lastCol = worksheet.LastColumnUsed()?.ColumnNumber() ?? 1;
+            var headers = new List<string>();
+            for (int col = 1; col <= lastCol; col++)
+            {
+                headers.Add(worksheet.Cell(headerRow.Value, col).GetString());
+            }
+            Log.Warning("Could not find accession column. Available headers: {Headers}", string.Join(", ", headers));
             return records;
         }
 
         // Read data rows
         var lastRow = worksheet.LastRowUsed()?.RowNumber() ?? headerRow.Value;
+        Log.Information("Reading rows {Start} to {End}", headerRow.Value + 1, lastRow);
         var totalRows = lastRow - headerRow.Value;
         var processedRows = 0;
 
@@ -437,33 +528,49 @@ public class ExcelChecker
 
     /// <summary>
     /// Find header row by looking for common column names.
+    /// Supports payroll Excel format with ExamAccession, StandardProcedureName columns.
     /// </summary>
     private int? FindHeaderRow(IXLWorksheet worksheet)
     {
+        // Exact column names from payroll Excel
+        var payrollHeaders = new[] { "examaccession", "standardprocedurename", "examfinalreportdt" };
+        // Generic column names
         var commonHeaders = new[] { "accession", "procedure", "study", "rvu", "date", "time" };
 
         for (int row = 1; row <= Math.Min(20, worksheet.LastRowUsed()?.RowNumber() ?? 1); row++)
         {
             var cellValues = new List<string>();
-            for (int col = 1; col <= Math.Min(20, worksheet.LastColumnUsed()?.ColumnNumber() ?? 1); col++)
+            for (int col = 1; col <= Math.Min(30, worksheet.LastColumnUsed()?.ColumnNumber() ?? 1); col++)
             {
-                var value = worksheet.Cell(row, col).GetString().ToLowerInvariant();
+                var value = worksheet.Cell(row, col).GetString().ToLowerInvariant().Replace("_", "");
                 cellValues.Add(value);
             }
 
-            var matchCount = commonHeaders.Count(h => cellValues.Any(v => v.Contains(h)));
-            if (matchCount >= 2)
+            // First check for payroll-specific headers
+            var payrollMatch = payrollHeaders.Count(h => cellValues.Any(v => v.Contains(h)));
+            if (payrollMatch >= 2)
             {
-                Log.Debug("Found header row at row {Row}", row);
+                Log.Debug("Found payroll header row at row {Row}", row);
+                return row;
+            }
+
+            // Then check for generic headers
+            var genericMatch = commonHeaders.Count(h => cellValues.Any(v => v.Contains(h)));
+            if (genericMatch >= 2)
+            {
+                Log.Debug("Found generic header row at row {Row}", row);
                 return row;
             }
         }
 
-        return null;
+        // Default to row 1 if nothing found
+        Log.Debug("No header row found, defaulting to row 1");
+        return 1;
     }
 
     /// <summary>
     /// Map column names to column numbers.
+    /// Supports both payroll-specific and generic column names.
     /// </summary>
     private Dictionary<string, int> MapColumns(IXLWorksheet worksheet, int headerRow)
     {
@@ -472,20 +579,32 @@ public class ExcelChecker
 
         for (int col = 1; col <= lastCol; col++)
         {
-            var header = worksheet.Cell(headerRow, col).GetString().ToLowerInvariant().Trim();
+            var header = worksheet.Cell(headerRow, col).GetString().Trim();
+            var headerLower = header.ToLowerInvariant().Replace("_", "");
 
-            if (header.Contains("accession"))
+            // Exact payroll column names (case-insensitive)
+            if (header.Equals("ExamAccession", StringComparison.OrdinalIgnoreCase))
                 map["accession"] = col;
-            else if (header.Contains("procedure") || header.Contains("study") || header.Contains("description"))
+            else if (header.Equals("StandardProcedureName", StringComparison.OrdinalIgnoreCase))
                 map["procedure"] = col;
-            else if (header.Contains("rvu") && !header.Contains("total"))
-                map["rvu"] = col;
-            else if (header.Contains("date") || header.Contains("time") || header.Contains("performed"))
+            else if (header.StartsWith("ExamFinalReportDT", StringComparison.OrdinalIgnoreCase))
                 map["timestamp"] = col;
-            else if (header.Contains("patient") && header.Contains("class"))
+            else if (header.Equals("wRVU_Matrix", StringComparison.OrdinalIgnoreCase))
+                map["rvu"] = col;
+            // Generic column matching
+            else if (!map.ContainsKey("accession") && headerLower.Contains("accession"))
+                map["accession"] = col;
+            else if (!map.ContainsKey("procedure") && (headerLower.Contains("procedure") || headerLower.Contains("description")))
+                map["procedure"] = col;
+            else if (!map.ContainsKey("rvu") && headerLower.Contains("rvu") && !headerLower.Contains("total"))
+                map["rvu"] = col;
+            else if (!map.ContainsKey("timestamp") && (headerLower.Contains("date") || headerLower.Contains("time") || headerLower.Contains("performed") || headerLower.Contains("final")))
+                map["timestamp"] = col;
+            else if (!map.ContainsKey("patient_class") && headerLower.Contains("patient") && headerLower.Contains("class"))
                 map["patient_class"] = col;
         }
 
+        Log.Debug("Mapped columns: {Columns}", string.Join(", ", map.Select(kvp => $"{kvp.Key}={kvp.Value}")));
         return map;
     }
 
@@ -563,6 +682,66 @@ public class ExcelChecker
         sb.AppendLine($"Excel File: {Path.GetFileName(result.ExcelPath)}");
         sb.AppendLine($"Date Range: {result.StartDate:yyyy-MM-dd} to {result.EndDate:yyyy-MM-dd}");
         sb.AppendLine();
+        sb.AppendLine("─────────────────────────────────");
+        sb.AppendLine("TOTALS");
+        sb.AppendLine("─────────────────────────────────");
+        sb.AppendLine($"Excel Records (total): {result.TotalExcel}");
+        sb.AppendLine($"Excel Records (in range): {result.TotalExcelInRange}");
+        sb.AppendLine($"Database Records: {result.TotalDb}");
+        sb.AppendLine();
+        sb.AppendLine("─────────────────────────────────");
+        sb.AppendLine("COMPARISON");
+        sb.AppendLine("─────────────────────────────────");
+        sb.AppendLine($"Matched: {result.Matched}");
+        sb.AppendLine($"Missing from DB: {result.MissingFromDb}");
+        sb.AppendLine($"Extra in DB: {result.ExtraInDb}");
+        sb.AppendLine();
+        sb.AppendLine($"Excel RVU: {result.TotalExcelRvu:F1}");
+        sb.AppendLine($"Database RVU: {result.TotalDbRvu:F1}");
+        sb.AppendLine($"Difference: {result.RvuDifference:F1}");
+
+        if (result.MissingFromDbDetails.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("─────────────────────────────────");
+            sb.AppendLine($"MISSING FROM DATABASE ({result.MissingFromDbDetails.Count})");
+            sb.AppendLine("─────────────────────────────────");
+            foreach (var record in result.MissingFromDbDetails.Take(20))
+            {
+                sb.AppendLine($"  {record.Timestamp:MM/dd HH:mm} - {record.Accession} - {record.Procedure}");
+            }
+            if (result.MissingFromDbDetails.Count > 20)
+                sb.AppendLine($"  ... and {result.MissingFromDbDetails.Count - 20} more");
+        }
+
+        if (result.ExtraInDbDetails.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("─────────────────────────────────");
+            sb.AppendLine($"EXTRA IN DATABASE ({result.ExtraInDbDetails.Count})");
+            sb.AppendLine("─────────────────────────────────");
+            foreach (var record in result.ExtraInDbDetails.Take(20))
+            {
+                sb.AppendLine($"  {record.Timestamp:MM/dd HH:mm} - {record.Accession} - {record.Procedure}");
+            }
+            if (result.ExtraInDbDetails.Count > 20)
+                sb.AppendLine($"  ... and {result.ExtraInDbDetails.Count - 20} more");
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Generate audit report text (legacy method for compatibility).
+    /// </summary>
+    private string GenerateReportTextLegacy(ExcelAuditResult result)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("=== EXCEL AUDIT REPORT (LEGACY) ===");
+        sb.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"Excel File: {Path.GetFileName(result.ExcelPath)}");
+        sb.AppendLine($"Date Range: {result.StartDate:yyyy-MM-dd} to {result.EndDate:yyyy-MM-dd}");
+        sb.AppendLine();
 
         sb.AppendLine("SUMMARY:");
         sb.AppendLine($"  Total Excel Records: {result.TotalExcelInRange}");
@@ -606,6 +785,178 @@ public class ExcelChecker
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Reconcile database with Excel audit results (Python parity: reconcile_database).
+    /// Deletes extra records from DB, adds missing records from Excel, creates shifts for orphans.
+    /// </summary>
+    public async Task<ReconcileResult> ReconcileDatabaseAsync(
+        ExcelAuditResult auditResult,
+        IProgress<(string Status, int Percent)>? progress = null)
+    {
+        var result = new ReconcileResult();
+
+        if (!auditResult.Success || auditResult.MissingFromDb == 0 && auditResult.ExtraInDb == 0)
+        {
+            result.Success = true;
+            result.Message = "Nothing to reconcile";
+            return result;
+        }
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                progress?.Report(("Deleting extra records...", 10));
+
+                // 1. Delete extra records (in DB but not in Excel)
+                if (auditResult.ExtraInDbDetails.Count > 0)
+                {
+                    var extraAccessions = auditResult.ExtraInDbDetails.Select(r => r.Accession).ToList();
+                    result.RecordsDeleted = _dataManager.Database.DeleteRecordsByAccessions(
+                        extraAccessions, auditResult.StartDate, auditResult.EndDate);
+                }
+
+                progress?.Report(("Adding missing records...", 30));
+
+                // 2. Add missing records (in Excel but not in DB)
+                if (auditResult.MissingFromDbDetails.Count > 0)
+                {
+                    // Get average durations for estimating study times
+                    var avgDurations = _dataManager.Database.GetAverageDurations(
+                        auditResult.StartDate, auditResult.EndDate);
+
+                    double GetDuration(string studyType) =>
+                        avgDurations.TryGetValue(studyType, out var d) ? d : 120.0;
+
+                    // Sort missing records by timestamp
+                    var missingRecords = auditResult.MissingFromDbDetails
+                        .OrderBy(r => r.Timestamp)
+                        .ToList();
+
+                    // Get existing shifts in the date range
+                    var existingShifts = _dataManager.Database.GetShiftsInDateRange(
+                        auditResult.StartDate, auditResult.EndDate);
+
+                    // Cluster missing records into groups (9 hour threshold)
+                    var clusters = ClusterRecords(missingRecords, TimeSpan.FromHours(9));
+
+                    progress?.Report(("Creating shifts for orphan studies...", 50));
+
+                    foreach (var cluster in clusters)
+                    {
+                        var clusterStart = cluster.First().Timestamp;
+                        var clusterEnd = cluster.Last().Timestamp;
+
+                        // Try to find an existing shift that contains this cluster
+                        int? targetShiftId = null;
+                        foreach (var shift in existingShifts)
+                        {
+                            var shiftEnd = shift.ShiftEnd ?? shift.ShiftStart.AddHours(9);
+                            // Check if cluster overlaps or is within 30 minutes of shift
+                            if (clusterStart >= shift.ShiftStart.AddMinutes(-30) &&
+                                clusterEnd <= shiftEnd.AddMinutes(30))
+                            {
+                                targetShiftId = shift.Id;
+                                break;
+                            }
+                        }
+
+                        // Create records for this cluster
+                        var studyRecords = cluster.Select(excelRec =>
+                        {
+                            var (studyType, rvu) = StudyMatcher.MatchStudyType(
+                                excelRec.Procedure,
+                                _dataManager.RvuTable,
+                                _dataManager.ClassificationRules);
+
+                            var duration = GetDuration(studyType);
+                            var finishTime = excelRec.Timestamp;
+                            var startTime = finishTime.AddSeconds(-duration);
+
+                            return new StudyRecord
+                            {
+                                Accession = _dataManager.HashAccession(excelRec.Accession),
+                                Procedure = excelRec.Procedure,
+                                StudyType = studyType,
+                                Rvu = rvu > 0 ? rvu : excelRec.Rvu,
+                                Timestamp = startTime,
+                                TimeFinished = finishTime,
+                                DurationSeconds = duration,
+                                PatientClass = excelRec.PatientClass,
+                                Source = "PayrollReconcile"
+                            };
+                        }).ToList();
+
+                        if (targetShiftId.HasValue)
+                        {
+                            // Add to existing shift
+                            _dataManager.Database.BatchAddRecords(targetShiftId.Value, studyRecords);
+                        }
+                        else
+                        {
+                            // Create new historical shift
+                            var shiftStart = clusterStart.AddMinutes(-10);
+                            var shiftEnd = clusterEnd.AddMinutes(10);
+                            var shiftName = $"{clusterStart:yyyy-MM-dd} (reconciled)";
+
+                            _dataManager.Database.InsertHistoricalShift(
+                                shiftStart, shiftEnd, studyRecords, shiftName);
+                            result.ShiftsCreated++;
+                        }
+
+                        result.RecordsAdded += studyRecords.Count;
+                    }
+                }
+
+                progress?.Report(("Cleaning up empty shifts...", 90));
+
+                // 3. Delete empty shifts in the date range
+                _dataManager.Database.DeleteEmptyShifts(auditResult.StartDate, auditResult.EndDate);
+
+                progress?.Report(("Reconciliation complete", 100));
+            });
+
+            result.Success = true;
+            result.Message = $"Deleted {result.RecordsDeleted}, Added {result.RecordsAdded}, Created {result.ShiftsCreated} shifts";
+            Log.Information("Reconciliation complete: {Message}", result.Message);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reconciliation failed");
+            result.ErrorMessage = ex.Message;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Cluster records by time gap threshold.
+    /// </summary>
+    private List<List<ExcelRecord>> ClusterRecords(List<ExcelRecord> records, TimeSpan maxGap)
+    {
+        var clusters = new List<List<ExcelRecord>>();
+        if (records.Count == 0) return clusters;
+
+        var currentCluster = new List<ExcelRecord> { records[0] };
+
+        for (int i = 1; i < records.Count; i++)
+        {
+            var gap = records[i].Timestamp - records[i - 1].Timestamp;
+            if (gap <= maxGap)
+            {
+                currentCluster.Add(records[i]);
+            }
+            else
+            {
+                clusters.Add(currentCluster);
+                currentCluster = new List<ExcelRecord> { records[i] };
+            }
+        }
+
+        clusters.Add(currentCluster);
+        return clusters;
     }
 }
 
@@ -689,6 +1040,19 @@ public class ExcelAuditResult
     public double MatchPercentage => TotalExcelInRange > 0
         ? (100.0 * Matched / TotalExcelInRange)
         : 0;
+}
+
+/// <summary>
+/// Result of database reconciliation.
+/// </summary>
+public class ReconcileResult
+{
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string Message { get; set; } = "";
+    public int RecordsDeleted { get; set; }
+    public int RecordsAdded { get; set; }
+    public int ShiftsCreated { get; set; }
 }
 
 #endregion

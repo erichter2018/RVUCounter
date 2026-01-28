@@ -148,5 +148,6 @@ public static class PlatformUtils
         Directory.CreateDirectory(Config.GetDataPath(root));
         Directory.CreateDirectory(Config.GetLogsPath(root));
         Directory.CreateDirectory(Path.Combine(root, Config.HelpersFolder));
+        Directory.CreateDirectory(Config.GetResourcesPath(root));
     }
 }

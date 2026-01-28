@@ -201,106 +201,135 @@
 
             <!-- Stats Panel -->
             <Border Grid.Row="3" Margin="10,4" Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="6" Padding="10,6">
-                <StackPanel Grid.IsSharedSizeScope="True">
-                    <!-- Total wRVU -->
-                    <Grid Visibility="{Binding ShowTotal, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Top: Stats + IP Stat side by side -->
+                    <Grid Grid.Row="0">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="total wRVU:"/>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding TotalRvu, StringFormat='{}{0:F1}'}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding TotalCompensation, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompTotal, Converter={StaticResource BoolToVisibility}}"/>
-                    </Grid>
-                    
-                    <!-- avg/hour -->
-                    <Grid Visibility="{Binding ShowAvg, Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="avg/hour:"/>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding AvgPerHour, StringFormat='{}{0:F1}'}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding AvgCompensationPerHour, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompAvg, Converter={StaticResource BoolToVisibility}}"/>
-                    </Grid>
-                    
-                    <!-- last hour -->
-                    <Grid Visibility="{Binding ShowLastHour, Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="last hour:"/>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding LastHourRvu, StringFormat='{}{0:F1}'}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding LastHourCompensation, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompLastHour, Converter={StaticResource BoolToVisibility}}"/>
-                    </Grid>
-                    
-                    <!-- last full hour -->
-                    <Grid Visibility="{Binding ShowLastFullHour, Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Style="{StaticResource StatLabel}" Text="{Binding LastFullHourRange}" FontSize="{DynamicResource FontSizeXSmall}"/>
-                            <TextBlock Style="{StaticResource StatLabel}" Text=" hour:" Margin="2,1,0,1"/>
+
+                        <!-- Left: Main stats -->
+                        <StackPanel Grid.Column="0" Grid.IsSharedSizeScope="True">
+                            <!-- Total wRVU -->
+                            <Grid Visibility="{Binding ShowTotal, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="total wRVU:"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding TotalRvu, StringFormat='{}{0:F1}'}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding TotalCompensation, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompTotal, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
+
+                            <!-- avg/hour -->
+                            <Grid Visibility="{Binding ShowAvg, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="avg/hour:"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding AvgPerHour, StringFormat='{}{0:F1}'}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding AvgCompensationPerHour, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompAvg, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
+
+                            <!-- last hour -->
+                            <Grid Visibility="{Binding ShowLastHour, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="last hour:"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding LastHourRvu, StringFormat='{}{0:F1}'}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding LastHourCompensation, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompLastHour, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
+
+                            <!-- last full hour -->
+                            <Grid Visibility="{Binding ShowLastFullHour, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <TextBlock Style="{StaticResource StatLabel}" Text="{Binding LastFullHourRange}" FontSize="{DynamicResource FontSizeXSmall}"/>
+                                    <TextBlock Style="{StaticResource StatLabel}" Text=" hour:" Margin="2,1,0,1"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding LastFullHourRvu, StringFormat='{}{0:F1}'}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding LastFullHourCompensation, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompLastFullHour, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
+
+                            <!-- est this hour -->
+                            <Grid Visibility="{Binding ShowProjected, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="est this hour:"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding ProjectedThisHour, StringFormat='{}{0:F1}'}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding ProjectedCompensation, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompProjected, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
+
+                            <!-- est shift total -->
+                            <Grid Visibility="{Binding ShowProjectedShift, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="est shift total:"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource StatValue}"
+                                           Text="{Binding ProjectedShiftTotal, StringFormat='{}{0:F1}'}"
+                                           Foreground="{DynamicResource AccentBrush}"/>
+                                <TextBlock Grid.Column="2" Style="{StaticResource CompValue}"
+                                           Text="{Binding ProjectedShiftCompensation, StringFormat='(${0:N0})'}"
+                                           Visibility="{Binding ShowCompProjectedShift, Converter={StaticResource BoolToVisibility}}"/>
+                            </Grid>
                         </StackPanel>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding LastFullHourRvu, StringFormat='{}{0:F1}'}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding LastFullHourCompensation, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompLastFullHour, Converter={StaticResource BoolToVisibility}}"/>
+
+                        <!-- Right: IP Stat (top-right corner, label on top, number below) -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Top" Margin="8,0,0,0"
+                                    Visibility="{Binding ShowInpatientStatPercentage, Converter={StaticResource BoolToVisibility}}"
+                                    ToolTip="Percentage of studies that are Stat Inpatient">
+                            <TextBlock Text="IP Stat" FontSize="{DynamicResource FontSizeSmall}"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       HorizontalAlignment="Right"/>
+                            <TextBlock Text="{Binding InpatientStatPercentage, StringFormat='{}{0:F1}%'}"
+                                       FontSize="{DynamicResource FontSizeNormal}" FontWeight="SemiBold"
+                                       HorizontalAlignment="Right"
+                                       Foreground="{Binding InpatientStatPercentage, Converter={StaticResource InpatientStatColorConverter}}"/>
+                        </StackPanel>
                     </Grid>
-                    
-                    <!-- est this hour -->
-                    <Grid Visibility="{Binding ShowProjected, Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="est this hour:"/>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding ProjectedThisHour, StringFormat='{}{0:F1}'}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding ProjectedCompensation, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompProjected, Converter={StaticResource BoolToVisibility}}"/>
-                    </Grid>
-                    
-                    <!-- est shift total -->
-                    <Grid Visibility="{Binding ShowProjectedShift, Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="StatLabel"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Style="{StaticResource StatLabel}" Text="est shift total:"/>
-                        <TextBlock Grid.Column="1" Style="{StaticResource StatValue}" 
-                                   Text="{Binding ProjectedShiftTotal, StringFormat='{}{0:F1}'}" 
-                                   Foreground="{DynamicResource AccentBrush}"/>
-                        <TextBlock Grid.Column="2" Style="{StaticResource CompValue}" 
-                                   Text="{Binding ProjectedShiftCompensation, StringFormat='(${0:N0})'}"
-                                   Visibility="{Binding ShowCompProjectedShift, Converter={StaticResource BoolToVisibility}}"/>
-                    </Grid>
-                    
-                    <!-- Pace Car - only visible when shift is active AND setting is enabled -->
-                    <views:PaceCarControl Margin="0,8,0,0" Cursor="Hand"
+
+                    <!-- Bottom: Pace Car - spans full width, independent of IP Stat column -->
+                    <views:PaceCarControl Grid.Row="1" Margin="0,8,0,0" Cursor="Hand"
                                           Visibility="{Binding IsPaceCarVisible, Converter={StaticResource BoolToVisibility}}"
                                           MouseLeftButtonUp="PaceCar_Click"/>
-                </StackPanel>
+                </Grid>
             </Border>
             
             <!-- Team Dashboard Panel (only visible when enabled) -->
@@ -432,14 +461,43 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
+                            <!-- Label + count -->
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <TextBlock Text="{Binding RecentStudiesLabel}" FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
                                            Foreground="{Binding RecentStudiesLabelColor}"/>
+                                <TextBlock Text="{Binding StudyCount, StringFormat=' ({0})'}" FontSize="{DynamicResource FontSizeSmall}"
+                                           Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
                             </StackPanel>
-                            <TextBlock Grid.Column="1" Text="{Binding StudyCount, StringFormat='({0})'}" FontSize="{DynamicResource FontSizeSmall}"
-                                       Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <Button Grid.Column="2" Content="{Binding UndoButtonText}" Padding="6,1" FontSize="{DynamicResource FontSizeXSmall}"
+                            <!-- Critical filter button (only visible when there are critical results) -->
+                            <Button Grid.Column="1" Padding="4,1" Margin="4,0,0,0"
+                                    Command="{Binding ToggleCriticalFilterCommand}"
+                                    ToolTip="{Binding CriticalFilterTooltip}"
+                                    Visibility="{Binding CriticalResultsCount, Converter={StaticResource PositiveToVisibility}}"
+                                    Cursor="Hand" BorderThickness="0">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="border" Background="{Binding ShowCriticalOnly, Converter={StaticResource CriticalFilterBackgroundConverter}}"
+                                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="⚠️" FontSize="9" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding CriticalResultsCount}" FontSize="9"
+                                                           Foreground="{Binding ShowCriticalOnly, Converter={StaticResource CriticalFilterTextConverter}}"
+                                                           FontWeight="Bold" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="border" Property="Opacity" Value="0.8"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <!-- Undo button -->
+                            <Button Grid.Column="2" Content="{Binding UndoButtonText}" Padding="6,1" Margin="4,0,0,0"
+                                    FontSize="{DynamicResource FontSizeXSmall}"
                                     Command="{Binding UndoLastCommand}" VerticalAlignment="Center"
                                     Background="{DynamicResource ButtonBackgroundBrush}"
                                     Foreground="{DynamicResource ButtonTextBrush}"
@@ -465,12 +523,45 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Border Padding="4,3" BorderBrush="{DynamicResource SeparatorBrush}" BorderThickness="0,0,0,1"
-                                            Background="{DynamicResource CardBackgroundBrush}" Cursor="Hand"
-                                            MouseLeftButtonDown="RecentStudy_MouseLeftButtonDown">
+                                            Background="{DynamicResource CardBackgroundBrush}">
+                                        <!-- Rich tooltip with patient name and site (memory only data) -->
+                                        <Border.ToolTip>
+                                            <ToolTip>
+                                                <StackPanel MaxWidth="300">
+                                                    <!-- Patient Name (if available) -->
+                                                    <TextBlock FontWeight="Bold" FontSize="12"
+                                                               Text="{Binding Accession, Converter={StaticResource PatientNameConverter}, ConverterParameter={x:Reference Name=mainWindow}}"
+                                                               Visibility="{Binding Accession, Converter={StaticResource PatientNameVisibilityConverter}, ConverterParameter={x:Reference Name=mainWindow}}"/>
+                                                    <!-- Site Code (if available) -->
+                                                    <TextBlock FontSize="11" Foreground="Gray"
+                                                               Text="{Binding Accession, Converter={StaticResource SiteCodeConverter}, ConverterParameter={x:Reference Name=mainWindow}}"
+                                                               Visibility="{Binding Accession, Converter={StaticResource SiteCodeVisibilityConverter}, ConverterParameter={x:Reference Name=mainWindow}}"/>
+                                                    <Separator Margin="0,4" Visibility="{Binding Accession, Converter={StaticResource PatientNameVisibilityConverter}, ConverterParameter={x:Reference Name=mainWindow}}"/>
+                                                    <!-- Study details -->
+                                                    <TextBlock Text="{Binding Procedure}" FontSize="11" TextWrapping="Wrap"/>
+                                                    <TextBlock FontSize="10" Foreground="Gray">
+                                                        <Run Text="Study Type: "/><Run Text="{Binding StudyType, Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10" Foreground="Gray">
+                                                        <Run Text="RVU: "/><Run Text="{Binding Rvu, StringFormat='{}{0:F1}', Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10" Foreground="Gray">
+                                                        <Run Text="Patient Class: "/><Run Text="{Binding PatientClass, Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10" Foreground="Gray">
+                                                        <Run Text="Time: "/><Run Text="{Binding Timestamp, StringFormat='{}{0:h:mm tt}', Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                    <!-- Critical result indicator -->
+                                                    <TextBlock FontSize="10" Foreground="OrangeRed" FontWeight="SemiBold"
+                                                               Text="Critical Result"
+                                                               Visibility="{Binding HasCriticalResult, Converter={StaticResource BoolToVisibility}}"/>
+                                                </StackPanel>
+                                            </ToolTip>
+                                        </Border.ToolTip>
                                         <Border.ContextMenu>
                                             <ContextMenu>
-                                                <MenuItem Header="View Details"
-                                                          Command="{Binding DataContext.ShowStudyDetailsCommand, Source={x:Reference Name=mainWindow}}"
+                                                <MenuItem Header="Open in Clario"
+                                                          Command="{Binding DataContext.OpenInClarioCommand, Source={x:Reference Name=mainWindow}}"
                                                           CommandParameter="{Binding}"/>
                                                 <Separator/>
                                                 <MenuItem Header="Delete"
@@ -484,12 +575,19 @@
                                                 <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
                                             <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
 
+                                            <!-- Critical result icon -->
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="⚠️" FontSize="10"
+                                                       VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#DC3545"
+                                                       Visibility="{Binding HasCriticalResult, Converter={StaticResource BoolToVisibility}}"
+                                                       ToolTip="Critical result communicated"/>
+
                                             <!-- Procedure Name (matches Python: shows procedure, not study type) -->
-                                            <TextBlock Grid.Row="0" Grid.Column="0"
+                                            <TextBlock Grid.Row="0" Grid.Column="1"
                                                        Text="{Binding Procedure}"
                                                        FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}"
                                                        TextTrimming="CharacterEllipsis"
@@ -497,20 +595,20 @@
                                                        Foreground="{Binding StudyType, Converter={StaticResource ModalityColorConverter}}"/>
 
                                             <!-- RVU (format: X.X RVU - matches Python) -->
-                                            <TextBlock Grid.Row="0" Grid.Column="1"
+                                            <TextBlock Grid.Row="0" Grid.Column="2"
                                                        Text="{Binding Rvu, StringFormat='{}{0:F1} RVU'}"
                                                        FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}"
                                                        VerticalAlignment="Center" Margin="4,0,0,0"
                                                        Foreground="{Binding StudyType, Converter={StaticResource ModalityColorConverter}}"/>
 
                                             <!-- Time Row: Time Ago + Duration (matches Python) - only shown if ShowTime is enabled -->
-                                            <TextBlock Grid.Row="1" Grid.Column="0"
+                                            <TextBlock Grid.Row="1" Grid.Column="1"
                                                        Text="{Binding Timestamp, Converter={StaticResource TimeAgoConverter}}"
                                                        FontFamily="Consolas" FontSize="{DynamicResource FontSizeXSmall}"
                                                        Foreground="{DynamicResource SecondaryTextBrush}"
                                                        Margin="0,1,0,0"
                                                        Visibility="{Binding DataContext.ShowTime, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}"/>
-                                            <TextBlock Grid.Row="1" Grid.Column="1"
+                                            <TextBlock Grid.Row="1" Grid.Column="2"
                                                        Text="{Binding DurationSeconds, Converter={StaticResource DurationConverter}}"
                                                        FontFamily="Consolas" FontSize="{DynamicResource FontSizeXSmall}"
                                                        Foreground="{DynamicResource SecondaryTextBrush}"
@@ -539,6 +637,11 @@
                     </Border>
 
                     <StackPanel Grid.Row="1" Margin="8,4">
+                        <!-- Patient Name (memory only - bold when available) -->
+                        <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource PrimaryTextBrush}"
+                                   Text="{Binding CurrentPatientName}"
+                                   Visibility="{Binding CurrentPatientName, Converter={StaticResource NonEmptyToVisibility}}"/>
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -577,95 +680,21 @@
             <!-- Status Bar -->
             <Border Grid.Row="7" Background="{DynamicResource StatusBarBackgroundBrush}" CornerRadius="0,0,8,8" Padding="10,4">
                 <Grid>
-                    <TextBlock Text="{Binding StatusMessage}" FontSize="{DynamicResource FontSizeSmall}"
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" FontSize="{DynamicResource FontSizeSmall}"
+                               Foreground="{DynamicResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="1" Text="{Binding PipeStatusText}" FontSize="{DynamicResource FontSizeSmall}"
+                               Foreground="{Binding PipeStatusColor}" Margin="6,0"
+                               ToolTip="{Binding PipeStatusTooltip}"/>
+                    <TextBlock Grid.Column="2" Text="{Binding ShiftDuration}" FontSize="{DynamicResource FontSizeSmall}"
                                Foreground="{DynamicResource SecondaryTextBrush}"/>
-                    <TextBlock Text="{Binding ShiftDuration}" FontSize="{DynamicResource FontSizeSmall}"
-                               Foreground="{DynamicResource SecondaryTextBrush}" HorizontalAlignment="Right"/>
                 </Grid>
             </Border>
 
-            <!-- Study Details Popup Overlay -->
-            <Border Grid.RowSpan="8" Background="#80000000"
-                    Visibility="{Binding IsStudyDetailsVisible, Converter={StaticResource BoolToVisibility}}"
-                    MouseLeftButtonDown="StudyDetailsOverlay_MouseLeftButtonDown">
-                <Border Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="8"
-                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                        MinWidth="220" MaxWidth="280" Padding="16"
-                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="20" ShadowDepth="5" Opacity="0.5"/>
-                    </Border.Effect>
-                    <StackPanel>
-                        <!-- Header -->
-                        <Grid Margin="0,0,0,12">
-                            <TextBlock Text="Study Details" FontWeight="Bold" FontSize="{DynamicResource FontSizeMedium}"
-                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
-                            <Button Content="✕" FontSize="12" Padding="4,2" HorizontalAlignment="Right"
-                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                    Command="{Binding CloseStudyDetailsCommand}"
-                                    Foreground="{DynamicResource SecondaryTextBrush}"/>
-                        </Grid>
-
-                        <!-- Details -->
-                        <TextBlock Text="Procedure:" FontWeight="SemiBold" FontSize="11"
-                                   Foreground="{DynamicResource SecondaryTextBrush}"/>
-                        <TextBlock Text="{Binding SelectedStudyForDetails.Procedure}" TextWrapping="Wrap"
-                                   FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-
-                        <TextBlock Text="Study Type:" FontWeight="SemiBold" FontSize="11"
-                                   Foreground="{DynamicResource SecondaryTextBrush}"/>
-                        <TextBlock Text="{Binding SelectedStudyForDetails.StudyType}"
-                                   FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="RVU:" FontWeight="SemiBold" FontSize="11"
-                                           Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                <TextBlock Text="{Binding SelectedStudyForDetails.Rvu, StringFormat='{}{0:F1}'}"
-                                           FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Patient Class:" FontWeight="SemiBold" FontSize="11"
-                                           Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                <TextBlock Text="{Binding SelectedStudyForDetails.PatientClass}"
-                                           FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="Time:" FontWeight="SemiBold" FontSize="11"
-                                           Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                <TextBlock Text="{Binding SelectedStudyForDetails.Timestamp, StringFormat='{}{0:h:mm tt}'}"
-                                           FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Duration:" FontWeight="SemiBold" FontSize="11"
-                                           Foreground="{DynamicResource SecondaryTextBrush}"/>
-                                <TextBlock Text="{Binding SelectedStudyForDetails.DurationSeconds, Converter={StaticResource DurationConverter}}"
-                                           FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,10"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <TextBlock Text="Source:" FontWeight="SemiBold" FontSize="11"
-                                   Foreground="{DynamicResource SecondaryTextBrush}"/>
-                        <TextBlock Text="{Binding SelectedStudyForDetails.Source}"
-                                   FontSize="12" Foreground="{DynamicResource PrimaryTextBrush}" Margin="0,2,0,0"/>
-                    </StackPanel>
-                </Border>
-            </Border>
         </Grid>
     </Border>
 </Window>

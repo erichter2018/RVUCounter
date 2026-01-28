@@ -50,9 +50,10 @@
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
   </ItemGroup>
 
-  <!-- Embedded Resources -->
+
+  <!-- Resources copied to output (external files) -->
   <ItemGroup>
-    <EmbeddedResource Include="Resources\rvu_rules.yaml" />
+    <None Include="Resources\rvu_rules.yaml" CopyToOutputDirectory="Never" />
   </ItemGroup>
 
 </Project>

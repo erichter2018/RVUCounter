@@ -23,6 +23,7 @@ public partial class StatisticsViewModel : ObservableObject
     private readonly DataManager _dataManager;
     private readonly TrendAnalysisService _trendService;
     private readonly ProductivityInsightsService _insightsService;
+    private readonly TbwuLookup _tbwuLookup;
     private List<StudyRecord> _allRecords = new();
 
     [ObservableProperty]
@@ -497,6 +498,7 @@ public partial class StatisticsViewModel : ObservableObject
         _dataManager = dataManager;
         _trendService = new TrendAnalysisService(_dataManager.Database);
         _insightsService = new ProductivityInsightsService(_dataManager.Database);
+        _tbwuLookup = new TbwuLookup();
 
         // Load pane widths from settings
         _leftPaneWidth = _dataManager.Settings.StatisticsLeftPaneWidth;
@@ -807,6 +809,14 @@ public partial class StatisticsViewModel : ObservableObject
             // Hourly Compensation Rate
             TableData.Add(new StatRow { Col1 = "Hourly Compensation Rate", Col2 = $"${compPerHour:N2}/hr" });
 
+            // TBWU equivalent
+            if (_tbwuLookup.IsAvailable)
+            {
+                var totalTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
+                var tbwuCompPerHour = totalTbwuComp / hoursSpan;
+                TableData.Add(new StatRow { Col1 = "Hourly Compensation Rate (TBWU)", Col2 = $"${tbwuCompPerHour:N2}/hr" });
+            }
+
             // ============ XR vs CT Efficiency ============
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
             TableData.Add(new StatRow { Col1 = "XR vs CT Efficiency:", Col2 = "" });
@@ -1115,12 +1125,28 @@ public partial class StatisticsViewModel : ObservableObject
         }
 
         var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
+        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+
+        // Build per-hour TBWU comp data
+        var hourTbwuComp = new Dictionary<int, double>();
+        if (_tbwuLookup.IsAvailable)
+        {
+            foreach (var record in records)
+            {
+                var hour = (record.TimeFinished ?? record.Timestamp).Hour;
+                if (!hourTbwuComp.ContainsKey(hour))
+                    hourTbwuComp[hour] = 0;
+                hourTbwuComp[hour] += _tbwuLookup.CalculateTbwuCompensation(record, role);
+            }
+        }
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
 
         if (hourData.Any())
         {
@@ -1141,16 +1167,22 @@ public partial class StatisticsViewModel : ObservableObject
             var data = hourData[hour];
             int hour12 = hour % 12 == 0 ? 12 : hour % 12;
             string amPm = hour < 12 ? "AM" : "PM";
+            var compStr = $"{data.studies} studies, {data.rvu:F1} RVU, ${data.comp:N0}";
+            if (_tbwuLookup.IsAvailable && hourTbwuComp.TryGetValue(hour, out var tbwuC))
+                compStr += $" (TBWU: ${tbwuC:N0})";
             TableData.Add(new StatRow
             {
                 Col1 = $"  {hour12}{amPm}",
-                Col2 = $"{data.studies} studies, {data.rvu:F1} RVU, ${data.comp:N0}"
+                Col2 = compStr
             });
         }
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}", IsTotal = true });
+        var totalStr = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        if (_tbwuLookup.IsAvailable)
+            totalStr += $" (TBWU: ${totalTbwuComp:N0})";
+        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalStr, IsTotal = true });
 
         // Build horizontal bar chart for side panel
         if (sortedHours.Any())
@@ -1227,6 +1259,11 @@ public partial class StatisticsViewModel : ObservableObject
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+        if (_tbwuLookup.IsAvailable)
+        {
+            var totalTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+        }
         TableData.Add(new StatRow { Col1 = "Modalities", Col2 = modalityData.Count.ToString() });
 
         // ============ BY MODALITY ============
@@ -1236,10 +1273,18 @@ public partial class StatisticsViewModel : ObservableObject
         foreach (var m in modalityData)
         {
             var pctRvu = TotalRvu > 0 ? (m.Rvu / TotalRvu * 100) : 0;
+            var compStr = $"{m.Studies} studies, {m.Rvu:F1} RVU ({pctRvu:F0}%), ${m.Comp:N0}";
+            if (_tbwuLookup.IsAvailable)
+            {
+                // Get records for this modality group to calculate TBWU comp
+                var modalityRecords = records.Where(r => ExtractModality(r.StudyType) == m.Modality);
+                var tbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(modalityRecords, role);
+                compStr += $" (TBWU: ${tbwuComp:N0})";
+            }
             TableData.Add(new StatRow
             {
                 Col1 = $"  {m.Modality}",
-                Col2 = $"{m.Studies} studies, {m.Rvu:F1} RVU ({pctRvu:F0}%), ${m.Comp:N0}"
+                Col2 = compStr
             });
         }
 
@@ -1260,7 +1305,13 @@ public partial class StatisticsViewModel : ObservableObject
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}", IsTotal = true });
+        var totalLineModality = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        if (_tbwuLookup.IsAvailable)
+        {
+            var totalTbwuCompMod = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
+            totalLineModality += $" (TBWU: ${totalTbwuCompMod:N0})";
+        }
+        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineModality, IsTotal = true });
 
         // Populate Pie Chart for side panel
         var seriesList = new List<ISeries>();
@@ -1324,12 +1375,15 @@ public partial class StatisticsViewModel : ObservableObject
             .ToList();
 
         var totalComp = typeData.Sum(t => t.Comp);
+        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
         TableData.Add(new StatRow { Col1 = "Unique Study Types", Col2 = typeData.Count.ToString() });
 
         // ============ TOP STUDY TYPES ============
@@ -1349,7 +1403,10 @@ public partial class StatisticsViewModel : ObservableObject
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
         var totalAvg = TotalStudies > 0 ? TotalRvu / TotalStudies : 0;
-        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}", IsTotal = true });
+        var totalLineStudyType = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        if (_tbwuLookup.IsAvailable)
+            totalLineStudyType += $" (TBWU: ${totalTbwuComp:N0})";
+        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineStudyType, IsTotal = true });
     }
 
     private void DisplayByPatientClass(List<StudyRecord> records)
@@ -1394,12 +1451,15 @@ public partial class StatisticsViewModel : ObservableObject
             .ToList();
 
         var totalComp = classData.Sum(c => c.Comp);
+        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
 
         // ============ BY PATIENT CLASS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
@@ -1408,10 +1468,17 @@ public partial class StatisticsViewModel : ObservableObject
         foreach (var c in classData)
         {
             var pctRvu = TotalRvu > 0 ? (c.Rvu / TotalRvu * 100) : 0;
+            var classCompStr = $"{c.Studies} studies, {c.Rvu:F1} RVU ({pctRvu:F0}%), ${c.Comp:N0}";
+            if (_tbwuLookup.IsAvailable)
+            {
+                var classTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
+                    records.Where(r => (string.IsNullOrWhiteSpace(r.PatientClass) ? "(Unknown)" : r.PatientClass) == c.PatientClass), role);
+                classCompStr += $" (TBWU: ${classTbwuComp:N0})";
+            }
             TableData.Add(new StatRow
             {
                 Col1 = $"  {c.PatientClass}",
-                Col2 = $"{c.Studies} studies, {c.Rvu:F1} RVU ({pctRvu:F0}%), ${c.Comp:N0}"
+                Col2 = classCompStr
             });
         }
 
@@ -1473,7 +1540,10 @@ public partial class StatisticsViewModel : ObservableObject
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}", IsTotal = true });
+        var totalLinePatientClass = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        if (_tbwuLookup.IsAvailable)
+            totalLinePatientClass += $" (TBWU: ${totalTbwuComp:N0})";
+        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLinePatientClass, IsTotal = true });
 
         // Populate Pie Chart for side panel
         var classColors = new Dictionary<string, SKColor>
@@ -1748,11 +1818,15 @@ public partial class StatisticsViewModel : ObservableObject
         // Calculate total compensation using per-record rates
         var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
         var avgCompPerRvu = TotalRvu > 0 ? totalComp / TotalRvu : 0;
+        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+        var totalTbwu = _tbwuLookup.IsAvailable ? _tbwuLookup.GetTotalTbwu(records) : 0.0;
 
         // ============ RVU Summary ============
         TableData.Add(new StatRow { Col1 = "RVU SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total TBWU", Col2 = $"{totalTbwu:F1}" });
         TableData.Add(new StatRow { Col1 = "Avg RVU/Study", Col2 = $"{AvgRvuPerStudy:F2}" });
 
         // ============ Compensation ============
@@ -1761,6 +1835,8 @@ public partial class StatisticsViewModel : ObservableObject
 
         TableData.Add(new StatRow { Col1 = $"Role", Col2 = role });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N2}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N2}" });
         TableData.Add(new StatRow { Col1 = "Avg $/RVU", Col2 = $"${avgCompPerRvu:F2}" });
 
         if (TotalStudies > 0)
@@ -1771,6 +1847,8 @@ public partial class StatisticsViewModel : ObservableObject
 
             TableData.Add(new StatRow { Col1 = "Hours Worked", Col2 = $"{hoursSpan:F1}" });
             TableData.Add(new StatRow { Col1 = "Comp/Hour", Col2 = $"${totalComp / hoursSpan:N2}" });
+            if (_tbwuLookup.IsAvailable)
+                TableData.Add(new StatRow { Col1 = "Comp/Hour (TBWU)", Col2 = $"${totalTbwuComp / hoursSpan:N2}" });
             TableData.Add(new StatRow { Col1 = "RVU/Hour", Col2 = $"{TotalRvu / hoursSpan:F1}" });
             TableData.Add(new StatRow { Col1 = "Studies/Hour", Col2 = $"{TotalStudies / hoursSpan:F1}" });
 
@@ -1849,6 +1927,22 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = "Projected Monthly Income", Col2 = $"${projectedMonthlyComp:N0}" });
             TableData.Add(new StatRow { Col1 = "Projected Annual Income", Col2 = $"${projectedAnnualComp:N0}" });
 
+            // TBWU projected income
+            if (_tbwuLookup.IsAvailable)
+            {
+                var actualMonthTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(currentMonthRecords, role);
+                var tbwuCompPerHour = actualMonthHours > 0 ? actualMonthTbwuComp / actualMonthHours : (hoursSpan > 0 ? totalTbwuComp / hoursSpan : 0);
+                var projectedRemainingTbwuComp = tbwuCompPerHour * remainingHours;
+                var projectedMonthlyTbwuComp = actualMonthTbwuComp + projectedRemainingTbwuComp;
+                var projectedAnnualTbwuComp = projectedMonthlyTbwuComp * 12;
+
+                TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
+                TableData.Add(new StatRow { Col1 = "TBWU PROJECTED INCOME", Col2 = "", IsHeader = true });
+                TableData.Add(new StatRow { Col1 = "Actual This Month (TBWU)", Col2 = $"${actualMonthTbwuComp:N0}" });
+                TableData.Add(new StatRow { Col1 = "Projected Monthly Income (TBWU)", Col2 = $"${projectedMonthlyTbwuComp:N0}" });
+                TableData.Add(new StatRow { Col1 = "Projected Annual Income (TBWU)", Col2 = $"${projectedAnnualTbwuComp:N0}" });
+            }
+
             // Target comparison if set
             if (monthlyTarget > 0)
             {
@@ -1874,10 +1968,17 @@ public partial class StatisticsViewModel : ObservableObject
 
             foreach (var m in modalities)
             {
+                var modCompStr = $"${m.Comp:N0} ({m.Studies} studies, {m.Rvu:F1} RVU)";
+                if (_tbwuLookup.IsAvailable)
+                {
+                    var modTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
+                        records.Where(r => ExtractModality(r.StudyType) == m.Modality), role);
+                    modCompStr += $" (TBWU: ${modTbwuComp:N0})";
+                }
                 TableData.Add(new StatRow
                 {
                     Col1 = $"  {m.Modality}",
-                    Col2 = $"${m.Comp:N0} ({m.Studies} studies, {m.Rvu:F1} RVU)"
+                    Col2 = modCompStr
                 });
             }
 
@@ -2028,12 +2129,15 @@ public partial class StatisticsViewModel : ObservableObject
             .ToList();
 
         var totalComp = bodyPartData.Sum(b => b.Comp);
+        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+        if (_tbwuLookup.IsAvailable)
+            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
         TableData.Add(new StatRow { Col1 = "Body Regions", Col2 = bodyPartData.Count.ToString() });
 
         // ============ BY BODY PART ============
@@ -2043,16 +2147,26 @@ public partial class StatisticsViewModel : ObservableObject
         foreach (var b in bodyPartData)
         {
             var pctRvu = TotalRvu > 0 ? (b.Rvu / TotalRvu * 100) : 0;
+            var bpCompStr = $"{b.Studies} studies, {b.Rvu:F1} RVU ({pctRvu:F0}%), ${b.Comp:N0}";
+            if (_tbwuLookup.IsAvailable)
+            {
+                var bpTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
+                    records.Where(r => ExtractBodyPart(r.StudyType) == b.BodyPart), role);
+                bpCompStr += $" (TBWU: ${bpTbwuComp:N0})";
+            }
             TableData.Add(new StatRow
             {
                 Col1 = $"  {b.BodyPart}",
-                Col2 = $"{b.Studies} studies, {b.Rvu:F1} RVU ({pctRvu:F0}%), ${b.Comp:N0}"
+                Col2 = bpCompStr
             });
         }
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}", IsTotal = true });
+        var totalLineBodyPart = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        if (_tbwuLookup.IsAvailable)
+            totalLineBodyPart += $" (TBWU: ${totalTbwuComp:N0})";
+        TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineBodyPart, IsTotal = true });
 
         // Pie chart for side panel
         var bodyPartColors = new Dictionary<string, SKColor>

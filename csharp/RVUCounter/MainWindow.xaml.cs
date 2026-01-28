@@ -21,8 +21,10 @@ public partial class MainWindow : Window
 
     // WM_COPYDATA constants for MosaicTools integration
     private const int WM_COPYDATA = 0x004A;
-    private const int CYCLEDATA_STUDY_SIGNED = 1;
-    private const int CYCLEDATA_STUDY_UNSIGNED = 2;
+    private const int CYCLEDATA_STUDY_SIGNED = 1;           // Study signed, no critical result
+    private const int CYCLEDATA_STUDY_UNSIGNED = 2;         // Study unsigned, no critical result
+    private const int CYCLEDATA_STUDY_SIGNED_CRITICAL = 3;  // Study signed with critical result
+    private const int CYCLEDATA_STUDY_UNSIGNED_CRITICAL = 4; // Study unsigned with critical result
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COPYDATASTRUCT
@@ -49,6 +51,9 @@ public partial class MainWindow : Window
         _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
         _hwndSource?.AddHook(WndProc);
         Log.Debug("WM_COPYDATA hook installed for MosaicTools integration");
+
+        // Start named pipe client for MosaicTools bridge
+        ViewModel?.StartPipeClient();
 
         // Subscribe to scroll to top event
         if (ViewModel != null)
@@ -132,16 +137,21 @@ public partial class MainWindow : Window
 
                 if (!string.IsNullOrEmpty(accession))
                 {
-                    if (messageType == CYCLEDATA_STUDY_SIGNED)
+                    bool hasCritical = (messageType == CYCLEDATA_STUDY_SIGNED_CRITICAL ||
+                                        messageType == CYCLEDATA_STUDY_UNSIGNED_CRITICAL);
+
+                    if (messageType == CYCLEDATA_STUDY_SIGNED || messageType == CYCLEDATA_STUDY_SIGNED_CRITICAL)
                     {
-                        Log.Information("MosaicTools: Study SIGNED - {Accession}", accession);
-                        ViewModel?.HandleMosaicToolsSignedStudy(accession);
+                        Log.Information("MosaicTools: Study SIGNED{Critical} - {Accession}",
+                            hasCritical ? " (CRITICAL)" : "", accession);
+                        ViewModel?.HandleMosaicToolsSignedStudy(accession, hasCritical);
                         handled = true;
                     }
-                    else if (messageType == CYCLEDATA_STUDY_UNSIGNED)
+                    else if (messageType == CYCLEDATA_STUDY_UNSIGNED || messageType == CYCLEDATA_STUDY_UNSIGNED_CRITICAL)
                     {
-                        Log.Information("MosaicTools: Study UNSIGNED - {Accession}", accession);
-                        ViewModel?.HandleMosaicToolsUnsignedStudy(accession);
+                        Log.Information("MosaicTools: Study UNSIGNED{Critical} - {Accession}",
+                            hasCritical ? " (CRITICAL)" : "", accession);
+                        ViewModel?.HandleMosaicToolsUnsignedStudy(accession, hasCritical);
                         handled = true;
                     }
                 }
@@ -225,25 +235,6 @@ public partial class MainWindow : Window
     {
         // Scroll the recent studies list to top
         RecentStudiesScrollViewer?.ScrollToTop();
-    }
-
-    private void RecentStudy_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        // Show study details on left click
-        if (sender is Border border && border.DataContext is StudyRecord study)
-        {
-            ViewModel?.ShowStudyDetailsCommand.Execute(study);
-            e.Handled = true;
-        }
-    }
-
-    private void StudyDetailsOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        // Close popup when clicking the overlay (background)
-        if (e.OriginalSource == sender)
-        {
-            ViewModel?.CloseStudyDetailsCommand.Execute(null);
-        }
     }
 
     private void TeamPanelHeader_Click(object sender, MouseButtonEventArgs e)

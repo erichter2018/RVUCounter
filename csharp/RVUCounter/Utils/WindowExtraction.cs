@@ -106,6 +106,16 @@ public static class WindowExtraction
                         var window = automation.FromHandle(process.MainWindowHandle);
                         if (window != null)
                         {
+                            // Validate the window handle is still accessible
+                            try
+                            {
+                                _ = window.Name; // Quick validity check
+                            }
+                            catch
+                            {
+                                Log.Debug("Stale window handle for {Process}, skipping", processName);
+                                continue;
+                            }
                             Log.Debug("Found window for process: {Process}", processName);
                             return window;
                         }
@@ -246,14 +256,19 @@ public static class WindowExtraction
         // Exclude dates, common words, etc.
         var lower = text.ToLowerInvariant();
 
-        // Exclude common non-accession patterns
-        string[] excludePatterns = { "patient", "study", "date", "time", "report", "image",
-            "series", "view", "chest", "head", "abdomen", "pelvis", "spine", "mri", "ct" };
-
-        foreach (var pattern in excludePatterns)
+        // Exclude common non-accession patterns, but only for multi-word text.
+        // Single-token accession codes like "320CT26001546ELP" legitimately embed
+        // modality codes (CT, MR) — substring matching would reject them.
+        if (text.Contains(' '))
         {
-            if (lower.Contains(pattern))
-                return false;
+            string[] excludePatterns = { "patient", "study", "date", "time", "report", "image",
+                "series", "view", "chest", "head", "abdomen", "pelvis", "spine", "mri", "ct" };
+
+            foreach (var pattern in excludePatterns)
+            {
+                if (lower.Contains(pattern))
+                    return false;
+            }
         }
 
         // Check for date patterns (MM/DD/YYYY or similar)
@@ -268,13 +283,14 @@ public static class WindowExtraction
             return false;
 
         // Real accessions have letters mixed in, OR are longer pure-numeric strings
-        // Short pure-numeric strings (< 10 chars) are likely garbage (patient IDs, room numbers, etc.)
-        if (letterCount == 0 && text.Length < 10)
+        // Short pure-numeric strings (< 6 chars) are likely garbage (patient IDs, room numbers, etc.)
+        // Lowered from 10 to 6 to allow 7-digit numeric accessions (e.g. "1057034")
+        if (letterCount == 0 && text.Length < 6)
             return false;
 
-        // If mostly digits with few letters, require minimum length of 8
-        // This catches garbage like "132562" while allowing real accessions like "SST2601230019274CST"
-        if (letterCount < 2 && text.Length < 8)
+        // If mostly digits with few letters, require minimum length of 6
+        // Lowered from 8 to 6 to allow shorter mixed accessions
+        if (letterCount < 2 && text.Length < 6)
             return false;
 
         // Accession should be mostly alphanumeric

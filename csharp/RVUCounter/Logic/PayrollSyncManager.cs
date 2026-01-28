@@ -22,6 +22,7 @@ public class PayrollSyncManager
     /// <summary>
     /// Calculate time offset between database and Excel timestamps.
     /// Python parity: Uses ExamAccession and ExamFinalReportDT_CT columns.
+    /// Searches all worksheets to find the one with required columns.
     /// </summary>
     public PayrollSyncResult CalculateOffset(string excelPath)
     {
@@ -38,25 +39,38 @@ public class PayrollSyncManager
             Log.Information("Reading Excel file for sync: {Path}", excelPath);
 
             using var workbook = new XLWorkbook(excelPath);
-            var sheet = workbook.Worksheets.FirstOrDefault();
-            if (sheet == null)
+            if (workbook.Worksheets.Count == 0)
             {
                 result.ErrorMessage = "No worksheets found in Excel file";
                 return result;
             }
 
-            // Find columns by exact name (Python parity)
-            var headerRow = sheet.Row(1);
+            // Search all worksheets for the one with required columns
+            IXLWorksheet? sheet = null;
             int? colAcc = null, colFinal = null;
 
-            for (int col = 1; col <= sheet.LastColumnUsed()?.ColumnNumber(); col++)
+            foreach (var ws in workbook.Worksheets)
             {
-                var header = sheet.Cell(1, col).GetString();
-                if (header == "ExamAccession") colAcc = col;
-                else if (header == "ExamFinalReportDT_CT") colFinal = col;
+                colAcc = null;
+                colFinal = null;
+
+                var lastCol = ws.LastColumnUsed()?.ColumnNumber() ?? 1;
+                for (int col = 1; col <= Math.Min(lastCol, 50); col++)
+                {
+                    var header = ws.Cell(1, col).GetString();
+                    if (header == "ExamAccession") colAcc = col;
+                    else if (header == "ExamFinalReportDT_CT") colFinal = col;
+                }
+
+                if (colAcc != null && colFinal != null)
+                {
+                    sheet = ws;
+                    Log.Information("Found offset columns in worksheet: {SheetName}", ws.Name);
+                    break;
+                }
             }
 
-            if (colAcc == null || colFinal == null)
+            if (sheet == null || colAcc == null || colFinal == null)
             {
                 result.ErrorMessage = "Missing required columns (ExamAccession, ExamFinalReportDT_CT)";
                 return result;

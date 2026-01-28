@@ -218,6 +218,7 @@
                                 <CheckBox Style="{StaticResource CheckItem}" Content="Est. this hour" IsChecked="{Binding ShowProjected}"/>
                                 <CheckBox Style="{StaticResource CheckItem}" Content="Est. shift total" IsChecked="{Binding ShowProjectedShift}"/>
                                 <CheckBox Style="{StaticResource CheckItem}" Content="Pace vs prior shift" IsChecked="{Binding ShowPaceCar}"/>
+                                <CheckBox Style="{StaticResource CheckItem}" Content="Inpatient Stat %" IsChecked="{Binding ShowInpatientStatPercentage}"/>
                             </StackPanel>
 
                             <!-- Right Column: Show Compensation -->
@@ -503,26 +504,56 @@
             
             <!-- About Tab -->
             <TabItem Header="About">
-                <StackPanel Margin="15">
-                    <TextBlock Text="RVU Counter" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="{Binding AppVersionDisplay}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,5,0,15"/>
-                    
-                    <TextBlock Text="Automatically counts radiology studies as you work." 
-                               TextWrapping="Wrap" Margin="0,0,0,10"/>
-                    
-                    <TextBlock Text="Features:" FontWeight="SemiBold" Margin="0,10,0,5"/>
-                    <TextBlock Text="• Automatic study detection from Mosaic" Margin="10,2"/>
-                    <TextBlock Text="• RVU tracking and compensation calculation" Margin="10,2"/>
-                    <TextBlock Text="• Detailed statistics and breakdowns" Margin="10,2"/>
-                    <TextBlock Text="• Cloud backup integration" Margin="10,2"/>
-                    <TextBlock Text="• Dark mode support" Margin="10,2"/>
-                    <TextBlock Text="• Configurable counter visibility" Margin="10,2"/>
-                    
-                    <Separator Margin="0,20" Background="{DynamicResource SeparatorBrush}"/>
-                    
-                    <TextBlock Text="Data is stored locally and all accession numbers are hashed for privacy." 
-                               TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"/>
-                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="15">
+                        <TextBlock Text="RVU Counter" FontSize="18" FontWeight="Bold"/>
+                        <TextBlock Text="{Binding AppVersionDisplay}" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,5,0,15"/>
+
+                        <TextBlock Text="Automatically counts radiology studies as you work."
+                                   TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                        <TextBlock Text="Features:" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                        <TextBlock Text="• Automatic study detection from Mosaic" Margin="10,2"/>
+                        <TextBlock Text="• RVU tracking and compensation calculation" Margin="10,2"/>
+                        <TextBlock Text="• Detailed statistics and breakdowns" Margin="10,2"/>
+                        <TextBlock Text="• Optional encrypted cloud backup" Margin="10,2"/>
+                        <TextBlock Text="• Dark mode support" Margin="10,2"/>
+                        <TextBlock Text="• Critical results tracking" Margin="10,2"/>
+
+                        <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Privacy & Security Section -->
+                        <TextBlock Text="Data Privacy &amp; Security" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,8"/>
+
+                        <Border Background="{DynamicResource PanelBackgroundBrush}" CornerRadius="4" Padding="12" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="HIPAA Compliant Design" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,6"/>
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" LineHeight="18">
+                                    <Run FontWeight="SemiBold">Local Storage:</Run>
+                                    <Run>All data is stored locally on your device. No patient information is transmitted to external servers without explicit user action.</Run>
+                                </TextBlock>
+
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" LineHeight="18" Margin="0,8,0,0">
+                                    <Run FontWeight="SemiBold">Accession Hashing:</Run>
+                                    <Run>Accession numbers are processed through SHA-256 cryptographic hashing with a unique per-installation salt. Original accession numbers are never stored and cannot be recovered from the hashed values.</Run>
+                                </TextBlock>
+
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" LineHeight="18" Margin="0,8,0,0">
+                                    <Run FontWeight="SemiBold">No PHI Storage:</Run>
+                                    <Run>Patient names, dates of birth, MRNs, and other Protected Health Information (PHI) are never written to disk. Patient identifiers displayed during active use are held in volatile memory only and cleared on application exit.</Run>
+                                </TextBlock>
+
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" LineHeight="18" Margin="0,8,0,0">
+                                    <Run FontWeight="SemiBold">Cloud Backup (Optional):</Run>
+                                    <Run>If enabled, backup synchronization uses end-to-end encryption. Only de-identified statistical data (RVU counts, timestamps, hashed accessions) is synchronized. Backup can be disabled at any time in Settings.</Run>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="This application is designed to comply with HIPAA Privacy and Security Rules. No Protected Health Information is persistently stored or transmitted."
+                                   TextWrapping="Wrap" FontSize="10" Foreground="{DynamicResource SecondaryTextBrush}" FontStyle="Italic"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
         </TabControl>
         

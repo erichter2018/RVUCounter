@@ -255,6 +255,7 @@ public class TeamSyncService : IDisposable
         {
             TotalRvu = m.TotalRvu,
             RvuPerHour = m.RvuPerHour,
+            InpatientStatPct = m.InpatientStatPct,
             DisplayValue = getValue(m),
             PositionPercent = (getValue(m) - displayMin) / displayRange,
             IsYou = m.Id == myId
