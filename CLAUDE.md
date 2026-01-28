@@ -202,6 +202,31 @@ taskkill //F //IM RVUCounter.exe 2>/dev/null; sleep 1; c:/Users/erik.richter/Des
 - Output location: `C:\Users\erik.richter\Desktop\RVUCounter\csharp\RVUCounter\bin\Release\net8.0-windows\win-x64\publish\RVUCounter.exe`
 - Non-critical warnings in BackupManager.cs (nullable references) can be ignored
 
+## Distribution
+
+**IMPORTANT: Always include `resources/rvu_rules.yaml` when distributing!**
+
+The `rvu_rules.yaml` file is NOT embedded in the executable - it's loaded from the filesystem at runtime. Without it, all studies will be classified as "Unknown" with 0 RVU.
+
+### Release Checklist
+1. Update version in `Core/Config.cs` (AppVersion and AppVersionDate)
+2. Build: `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`
+3. Create release folder with:
+   - `RVUCounter.exe` (from publish output)
+   - `resources/rvu_rules.yaml` (from publish output or source)
+4. Create zip containing both exe and resources folder
+5. Create GitHub Release at https://github.com/erichter2018/RVUCounter/releases
+6. Upload both `RVUCounter.exe` and `RVUCounter.zip`
+
+### Download Links (always latest)
+- https://github.com/erichter2018/RVUCounter/releases/latest/download/RVUCounter.zip
+- https://github.com/erichter2018/RVUCounter/releases/latest/download/RVUCounter.exe
+
+### Files Generated Dynamically (no need to distribute)
+- `settings/user_settings.yaml` - Created on first run with defaults
+- `data/rvu_records.db` - SQLite database created on first run
+- `logs/` - Log files created during runtime
+
 ## Feature Parity Status
 
 ### Implemented in C#
