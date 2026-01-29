@@ -2,18 +2,21 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using Serilog;
 
 namespace RVUCounter.Core;
 
 /// <summary>
 /// Manages application themes (Light/Dark mode) and global font size scaling.
+/// Supports preset themes with per-color customization.
 /// </summary>
 public static class ThemeManager
 {
     private static ResourceDictionary? _currentTheme;
     private static bool _isDarkMode;
     private static double _fontSizeAdjustment = 0;
+    private static string _currentPresetKey = "default_dark";
 
     // Base font sizes used throughout the app
     private const double BaseFontSizeXSmall = 9;
@@ -34,16 +37,33 @@ public static class ThemeManager
     #endregion
 
     /// <summary>
-    /// Apply the specified theme to the application.
+    /// Gets the current preset key.
     /// </summary>
-    /// <param name="isDarkMode">True for dark theme, false for light theme.</param>
+    public static string CurrentPresetKey => _currentPresetKey;
+
+    /// <summary>
+    /// Apply the specified theme to the application (backward compatibility).
+    /// </summary>
     public static void ApplyTheme(bool isDarkMode)
+    {
+        ApplyPreset(isDarkMode ? "default_dark" : "default_light", null);
+    }
+
+    /// <summary>
+    /// Apply a theme preset with optional color overrides.
+    /// Loads the base XAML dictionary (dark/light), then applies preset colors,
+    /// then applies custom overrides on top.
+    /// </summary>
+    public static void ApplyPreset(string presetKey, Dictionary<string, string>? overrides)
     {
         try
         {
-            _isDarkMode = isDarkMode;
+            var preset = ThemePresets.GetPreset(presetKey);
+            _currentPresetKey = presetKey;
+            _isDarkMode = preset.IsDark;
 
-            var themePath = isDarkMode
+            // Load base XAML theme dictionary (for non-brush resources)
+            var themePath = preset.IsDark
                 ? "pack://application:,,,/Themes/DarkTheme.xaml"
                 : "pack://application:,,,/Themes/LightTheme.xaml";
 
@@ -59,22 +79,94 @@ public static class ThemeManager
                 app.Resources.MergedDictionaries.Remove(_currentTheme);
             }
 
-            // Add new theme
+            // Add base theme dictionary
             app.Resources.MergedDictionaries.Add(newTheme);
             _currentTheme = newTheme;
+
+            // Override all brush resources from preset colors
+            foreach (var kvp in preset.Colors)
+            {
+                ApplyBrushResource(app, kvp.Key, kvp.Value);
+            }
+
+            // Apply custom overrides on top
+            if (overrides != null)
+            {
+                foreach (var kvp in overrides)
+                {
+                    ApplyBrushResource(app, kvp.Key, kvp.Value);
+                }
+            }
 
             // Apply dark title bar to all open windows
             foreach (Window window in app.Windows)
             {
-                ApplyDarkTitleBar(window, isDarkMode);
+                ApplyDarkTitleBar(window, _isDarkMode);
             }
 
-            Log.Information("Applied {Theme} theme", isDarkMode ? "Dark" : "Light");
+            Log.Information("Applied preset {Preset} (dark={IsDark})", presetKey, _isDarkMode);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to apply theme");
+            Log.Error(ex, "Failed to apply preset {Preset}", presetKey);
         }
+    }
+
+    /// <summary>
+    /// Apply a single brush color to app resources by resource key.
+    /// </summary>
+    public static void ApplyBrushResource(string resourceKey, string hexColor)
+    {
+        var app = Application.Current;
+        if (app == null) return;
+        ApplyBrushResource(app, resourceKey, hexColor);
+    }
+
+    private static void ApplyBrushResource(Application app, string resourceKey, string hexColor)
+    {
+        try
+        {
+            var color = (Color)ColorConverter.ConvertFromString(hexColor);
+            app.Resources[resourceKey] = new SolidColorBrush(color);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Failed to apply brush {Key}={Value}", resourceKey, hexColor);
+        }
+    }
+
+    /// <summary>
+    /// Apply a font family to the global resource.
+    /// </summary>
+    public static void ApplyFontFamily(string fontFamily)
+    {
+        try
+        {
+            var app = Application.Current;
+            if (app == null) return;
+
+            app.Resources["AppFontFamily"] = new FontFamily(fontFamily);
+            Log.Information("Applied font family: {FontFamily}", fontFamily);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to apply font family {FontFamily}", fontFamily);
+        }
+    }
+
+    /// <summary>
+    /// Get the current hex color for a brush resource key.
+    /// </summary>
+    public static string GetCurrentColor(string resourceKey)
+    {
+        var app = Application.Current;
+        if (app == null) return "#808080";
+
+        if (app.Resources[resourceKey] is SolidColorBrush brush)
+        {
+            return brush.Color.ToString();
+        }
+        return "#808080";
     }
 
     /// <summary>

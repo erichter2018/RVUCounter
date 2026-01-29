@@ -875,9 +875,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowCompProjected = _dataManager.Settings.ShowCompProjected;
         ShowCompProjectedShift = _dataManager.Settings.ShowCompProjectedShift;
 
-        // Dark mode
-        DarkMode = _dataManager.Settings.DarkMode;
-        ThemeManager.ApplyTheme(DarkMode);
+        // Theme preset (load custom themes first, then apply)
+        ThemePresets.LoadCustomPresets(_dataManager.Settings.CustomThemes);
+        ThemeManager.ApplyPreset(_dataManager.Settings.ThemePreset, _dataManager.Settings.CustomThemeOverrides);
+        ThemeManager.ApplyFontFamily(_dataManager.Settings.FontFamily);
+        DarkMode = ThemeManager.IsDarkMode;
 
         // Global font size adjustment
         ThemeManager.ApplyFontSize(_dataManager.Settings.GlobalFontSizeAdjustment);
@@ -1161,9 +1163,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowCompProjected = settings.ShowCompProjected;
         ShowCompProjectedShift = settings.ShowCompProjectedShift;
 
-        // Dark mode
-        DarkMode = settings.DarkMode;
-        ThemeManager.ApplyTheme(DarkMode);
+        // Theme
+        ThemeManager.ApplyPreset(settings.ThemePreset, settings.CustomThemeOverrides);
+        ThemeManager.ApplyFontFamily(settings.FontFamily);
+        DarkMode = ThemeManager.IsDarkMode;
 
         // Show time in recent studies
         ShowTime = settings.ShowTime;

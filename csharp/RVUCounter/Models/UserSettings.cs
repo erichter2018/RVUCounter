@@ -1,3 +1,4 @@
+using RVUCounter.Core;
 using YamlDotNet.Serialization;
 
 namespace RVUCounter.Models;
@@ -27,6 +28,13 @@ public class UserSettings
 
     // Global font size adjustment (-2.0 to +4.0 in 0.5 increments, 0 = default)
     public double GlobalFontSizeAdjustment { get; set; } = 0.0;
+
+    // Theme settings
+    public string ThemePreset { get; set; } = "default_dark";
+    public Dictionary<string, string>? CustomThemeOverrides { get; set; }
+    public string FontFamily { get; set; } = "Segoe UI";
+    public Dictionary<string, SavedTheme>? CustomThemes { get; set; }
+
 
     // Counter visibility toggles (Python parity)
     public bool ShowTotal { get; set; } = true;

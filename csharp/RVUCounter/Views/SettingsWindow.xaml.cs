@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using RVUCounter.Core;
 using RVUCounter.Data;
 using RVUCounter.ViewModels;
@@ -65,10 +66,35 @@ public partial class SettingsWindow : Window
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
-        // Revert any live-previewed font size changes
+        // Revert any live-previewed changes
         _viewModel.RevertFontSize();
+        _viewModel.RevertTheme();
         DialogResult = false;
         Close();
+    }
+
+    private void ColorSwatch_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement element && element.Tag is ColorOverrideItem item)
+        {
+            var dialog = new System.Windows.Forms.ColorDialog();
+
+            // Try to set current color
+            try
+            {
+                var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(item.HexColor);
+                dialog.Color = System.Drawing.Color.FromArgb(color.A, color.R, color.G, color.B);
+            }
+            catch { }
+
+            dialog.FullOpen = true;
+
+            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            {
+                var c = dialog.Color;
+                item.HexColor = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+            }
+        }
     }
 
     private async void AuthorizeDropbox_Click(object sender, RoutedEventArgs e)

@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using RVUCounter.Core;
@@ -17,6 +19,13 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly DataManager _dataManager;
     private double _originalFontSizeAdjustment;
+    private BackupManager? _backupManager;
+
+    private BackupManager GetBackupManager() => _backupManager ??= new BackupManager(
+        _dataManager.DatabasePath,
+        () => _dataManager.Settings,
+        s => _dataManager.SaveSettings(),
+        () => _dataManager.Database.Checkpoint());
 
     // ===========================================
     // GENERAL SETTINGS
@@ -250,9 +259,282 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _isTeamOperationInProgress;
 
+    // ===========================================
+    // APPEARANCE (THEME)
+    // ===========================================
+
+    [ObservableProperty]
+    private string _themePreset = "default_dark";
+
+    [ObservableProperty]
+    private string _fontFamily = "Segoe UI";
+
+    [ObservableProperty]
+    private string _customThemeName = "";
+
+    [ObservableProperty]
+    private bool _isCustomPresetSelected;
+
+    private string _originalThemePreset = "default_dark";
+    private Dictionary<string, string>? _originalCustomOverrides;
+    private string _originalFontFamily = "Segoe UI";
+
+    /// <summary>
+    /// Available theme presets for the combo box.
+    /// </summary>
+    public ObservableCollection<PresetItem> AvailablePresets { get; } = new();
+
+    /// <summary>
+    /// Available font families.
+    /// </summary>
+    public ObservableCollection<string> AvailableFonts { get; } = new()
+    {
+        "Segoe UI", "Calibri", "Consolas", "Cascadia Code", "Verdana", "Tahoma", "Arial"
+    };
+
+    /// <summary>
+    /// Color override items grouped by category.
+    /// </summary>
+    public ObservableCollection<ColorOverrideItem> BackgroundColors { get; } = new();
+    public ObservableCollection<ColorOverrideItem> TextColors { get; } = new();
+    public ObservableCollection<ColorOverrideItem> AccentColors { get; } = new();
+    public ObservableCollection<ColorOverrideItem> UiElementColors { get; } = new();
+
+    partial void OnThemePresetChanged(string value)
+    {
+        // Apply preset live and rebuild color lists
+        ThemeManager.ApplyPreset(value, null);
+        PopulateColorItems(value, null);
+        IsCustomPresetSelected = ThemePresets.IsCustom(value);
+    }
+
+    partial void OnFontFamilyChanged(string value)
+    {
+        ThemeManager.ApplyFontFamily(value);
+    }
+
+    [RelayCommand]
+    private void ResetAllColors()
+    {
+        // Reset to current preset defaults (no overrides) and reapply + refresh swatches
+        ThemeManager.ApplyPreset(ThemePreset, null);
+        PopulateColorItems(ThemePreset, null);
+    }
+
+    [RelayCommand]
+    private void SaveCustomTheme()
+    {
+        var name = CustomThemeName?.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            MessageBox.Show("Please enter a name for the theme.", "Save Theme",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Generate a key from the name
+        var key = "custom_" + name.ToLowerInvariant().Replace(' ', '_');
+
+        // Collect current colors (preset + overrides)
+        var allColors = CollectAllCurrentColors();
+        var preset = ThemePresets.GetPreset(ThemePreset);
+
+        ThemePresets.SaveCustomPreset(key, name, preset.IsDark, allColors);
+
+        // Persist to settings immediately
+        _dataManager.Settings.CustomThemes = ThemePresets.GetCustomPresetsForSave();
+        _dataManager.SaveSettings();
+
+        // Refresh preset list and select the new one
+        RefreshPresetList();
+        _themePreset = key;
+        OnPropertyChanged(nameof(ThemePreset));
+        IsCustomPresetSelected = true;
+        PopulateColorItems(key, null);
+
+        CustomThemeName = "";
+        Log.Information("Saved custom theme: {Name} ({Key})", name, key);
+    }
+
+    [RelayCommand]
+    private void UpdateCustomTheme()
+    {
+        if (!ThemePresets.IsCustom(ThemePreset))
+        {
+            MessageBox.Show("Cannot update a built-in preset. Use 'Save As' to create a custom theme.",
+                "Update Theme", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var existing = ThemePresets.GetPreset(ThemePreset);
+        var allColors = CollectAllCurrentColors();
+
+        ThemePresets.SaveCustomPreset(ThemePreset, existing.DisplayName, existing.IsDark, allColors);
+
+        _dataManager.Settings.CustomThemes = ThemePresets.GetCustomPresetsForSave();
+        _dataManager.SaveSettings();
+
+        // Refresh color items to update PresetDefault values
+        PopulateColorItems(ThemePreset, null);
+
+        Log.Information("Updated custom theme: {Key}", ThemePreset);
+    }
+
+    [RelayCommand]
+    private void DeleteCustomTheme()
+    {
+        if (!ThemePresets.IsCustom(ThemePreset))
+        {
+            MessageBox.Show("Cannot delete a built-in preset.",
+                "Delete Theme", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            $"Delete custom theme \"{ThemePresets.GetPreset(ThemePreset).DisplayName}\"?",
+            "Delete Theme", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        var deletedKey = ThemePreset;
+        ThemePresets.DeleteCustomPreset(deletedKey);
+
+        _dataManager.Settings.CustomThemes = ThemePresets.GetCustomPresetsForSave();
+        _dataManager.SaveSettings();
+
+        // Switch to default_dark and refresh
+        RefreshPresetList();
+        ThemePreset = "default_dark";
+
+        Log.Information("Deleted custom theme: {Key}", deletedKey);
+    }
+
+    /// <summary>
+    /// Collect ALL current colors (as displayed in swatches) for saving a custom theme.
+    /// </summary>
+    private Dictionary<string, string> CollectAllCurrentColors()
+    {
+        var colors = new Dictionary<string, string>();
+
+        void CollectFrom(ObservableCollection<ColorOverrideItem> items)
+        {
+            foreach (var item in items)
+                colors[item.ResourceKey] = item.HexColor;
+        }
+
+        CollectFrom(BackgroundColors);
+        CollectFrom(TextColors);
+        CollectFrom(AccentColors);
+        CollectFrom(UiElementColors);
+        return colors;
+    }
+
+    /// <summary>
+    /// Revert theme to the original state (called on Cancel).
+    /// </summary>
+    public void RevertTheme()
+    {
+        ThemeManager.ApplyPreset(_originalThemePreset, _originalCustomOverrides);
+        ThemeManager.ApplyFontFamily(_originalFontFamily);
+    }
+
+    /// <summary>
+    /// Refresh the preset combo box list (built-in + custom).
+    /// </summary>
+    private void RefreshPresetList()
+    {
+        AvailablePresets.Clear();
+        foreach (var p in ThemePresets.GetAllPresets())
+        {
+            AvailablePresets.Add(new PresetItem(p.Key, p.DisplayName));
+        }
+    }
+
+    /// <summary>
+    /// Populate color override items from preset + optional overrides.
+    /// </summary>
+    private void PopulateColorItems(string presetKey, Dictionary<string, string>? overrides)
+    {
+        var preset = ThemePresets.GetPreset(presetKey);
+
+        PopulateGroup(BackgroundColors, ThemePresets.BackgroundKeys, preset, overrides);
+        PopulateGroup(TextColors, ThemePresets.TextKeys, preset, overrides);
+        PopulateGroup(AccentColors, ThemePresets.AccentKeys, preset, overrides);
+        PopulateGroup(UiElementColors, ThemePresets.UIElementKeys, preset, overrides);
+    }
+
+    private void PopulateGroup(ObservableCollection<ColorOverrideItem> collection,
+        string[] keys, ThemePreset preset, Dictionary<string, string>? overrides)
+    {
+        // Unsubscribe from old items
+        foreach (var item in collection)
+            item.PropertyChanged -= ColorItem_PropertyChanged;
+
+        collection.Clear();
+
+        foreach (var key in keys)
+        {
+            var presetDefault = preset.Colors.TryGetValue(key, out var c) ? c : "#808080";
+            var current = overrides != null && overrides.TryGetValue(key, out var ov) ? ov : presetDefault;
+            var displayName = ThemePresets.DisplayNames.TryGetValue(key, out var dn) ? dn : key;
+
+            var item = new ColorOverrideItem
+            {
+                ResourceKey = key,
+                DisplayName = displayName,
+                PresetDefault = presetDefault,
+                HexColor = current
+            };
+            item.PropertyChanged += ColorItem_PropertyChanged;
+            collection.Add(item);
+        }
+    }
+
+    private void ColorItem_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ColorOverrideItem.HexColor) && sender is ColorOverrideItem item)
+        {
+            // Apply the color change live
+            ThemeManager.ApplyBrushResource(item.ResourceKey, item.HexColor);
+        }
+    }
+
+    /// <summary>
+    /// Collect non-default overrides from all color items for saving.
+    /// </summary>
+    private Dictionary<string, string>? CollectCustomOverrides()
+    {
+        var overrides = new Dictionary<string, string>();
+
+        void CollectFrom(ObservableCollection<ColorOverrideItem> items)
+        {
+            foreach (var item in items)
+            {
+                if (!string.Equals(item.HexColor, item.PresetDefault, StringComparison.OrdinalIgnoreCase))
+                {
+                    overrides[item.ResourceKey] = item.HexColor;
+                }
+            }
+        }
+
+        CollectFrom(BackgroundColors);
+        CollectFrom(TextColors);
+        CollectFrom(AccentColors);
+        CollectFrom(UiElementColors);
+
+        return overrides.Count > 0 ? overrides : null;
+    }
+
     public SettingsViewModel(DataManager dataManager)
     {
         _dataManager = dataManager;
+
+        // Load custom presets from settings
+        ThemePresets.LoadCustomPresets(dataManager.Settings.CustomThemes);
+
+        // Populate preset list (built-in + custom)
+        RefreshPresetList();
+
         LoadSettings();
     }
 
@@ -533,10 +815,7 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             // Get OneDrive backups
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             OneDriveBackups.Clear();
             var oneDriveList = backupManager.GetBackupHistory();
@@ -578,10 +857,7 @@ public partial class SettingsViewModel : ObservableObject
 
         try
         {
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             if (backupManager.DeleteOneDriveBackup(backup.FilePath))
             {
@@ -611,10 +887,7 @@ public partial class SettingsViewModel : ObservableObject
 
         try
         {
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             if (await backupManager.DeleteDropboxBackupAsync(backup.RemotePath))
             {
@@ -651,10 +924,7 @@ public partial class SettingsViewModel : ObservableObject
 
         try
         {
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             var (success, message) = await backupManager.RestoreFromBackupAsync(backup.FilePath);
 
@@ -697,10 +967,7 @@ public partial class SettingsViewModel : ObservableObject
 
         try
         {
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             var (success, message) = await backupManager.DownloadAndRestoreDropboxBackupAsync(backup.RemotePath);
 
@@ -731,10 +998,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         try
         {
-            var backupManager = new BackupManager(
-                _dataManager.DatabasePath,
-                () => _dataManager.Settings,
-                s => _dataManager.SaveSettings());
+            var backupManager = GetBackupManager();
 
             var result = await backupManager.CreateBackupAsync("manual");
 
@@ -787,6 +1051,17 @@ public partial class SettingsViewModel : ObservableObject
         _originalFontSizeAdjustment = settings.GlobalFontSizeAdjustment;
         GlobalFontSizeAdjustment = settings.GlobalFontSizeAdjustment;
         Role = settings.Role;
+
+        // Appearance - load without triggering OnChanged (set backing fields directly)
+        _originalThemePreset = settings.ThemePreset;
+        _originalCustomOverrides = settings.CustomThemeOverrides != null
+            ? new Dictionary<string, string>(settings.CustomThemeOverrides) : null;
+        _originalFontFamily = settings.FontFamily;
+        _themePreset = settings.ThemePreset;
+        _fontFamily = settings.FontFamily;
+        OnPropertyChanged(nameof(ThemePreset));
+        OnPropertyChanged(nameof(FontFamily));
+        PopulateColorItems(settings.ThemePreset, settings.CustomThemeOverrides);
         IgnoreDuplicateAccessions = settings.IgnoreDuplicateAccessions;
         MosaicToolsIntegrationEnabled = settings.MosaicToolsIntegrationEnabled;
         MosaicToolsTimeoutSeconds = settings.MosaicToolsTimeoutSeconds;
@@ -837,13 +1112,22 @@ public partial class SettingsViewModel : ObservableObject
     {
         var settings = _dataManager.Settings;
 
+        // Appearance / Theme
+        settings.ThemePreset = ThemePreset;
+        settings.CustomThemeOverrides = CollectCustomOverrides();
+        settings.FontFamily = FontFamily;
+        settings.CustomThemes = ThemePresets.GetCustomPresetsForSave();
+        // Keep DarkMode in sync for backward compat
+        var preset = ThemePresets.GetPreset(ThemePreset);
+        settings.DarkMode = preset.IsDark;
+
         // General
         settings.ShiftLengthHours = ShiftLengthHours;
         settings.MinStudySeconds = MinStudySeconds;
         settings.AlwaysOnTop = AlwaysOnTop;
         settings.StartMinimized = StartMinimized;
         settings.AutoResumeOnStartup = AutoResumeOnStartup;
-        settings.DarkMode = DarkMode;
+        settings.DarkMode = preset.IsDark;
         settings.ShowTime = ShowTime;
         settings.GlobalFontSizeAdjustment = GlobalFontSizeAdjustment;
         settings.Role = Role;
@@ -894,4 +1178,25 @@ public partial class SettingsViewModel : ObservableObject
 
         _dataManager.SaveSettings();
     }
+}
+
+/// <summary>
+/// Represents a theme preset for display in combo box.
+/// </summary>
+public record PresetItem(string Key, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
+
+/// <summary>
+/// Represents a single color override item for the appearance settings UI.
+/// </summary>
+public partial class ColorOverrideItem : ObservableObject
+{
+    public string ResourceKey { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string PresetDefault { get; set; } = "#808080";
+
+    [ObservableProperty]
+    private string _hexColor = "#808080";
 }

@@ -119,37 +119,7 @@
                         <CheckBox Style="{StaticResource CheckItem}" Content="Always on top" IsChecked="{Binding AlwaysOnTop}"/>
                         <CheckBox Style="{StaticResource CheckItem}" Content="Start minimized" IsChecked="{Binding StartMinimized}"/>
                         <CheckBox Style="{StaticResource CheckItem}" Content="Auto-resume shift on launch" IsChecked="{Binding AutoResumeOnStartup}"/>
-                        <CheckBox Style="{StaticResource CheckItem}" Content="Dark Mode" IsChecked="{Binding DarkMode}"/>
                         <CheckBox Style="{StaticResource CheckItem}" Content="Show time in display" IsChecked="{Binding ShowTime}"/>
-
-                        <Grid Margin="0,8,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Font Size:" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                            <Button Grid.Column="1" Content=" − " Padding="6,2" Margin="0,0,4,0"
-                                    Command="{Binding DecreaseFontSizeCommand}"
-                                    Background="{DynamicResource ButtonBackgroundBrush}"
-                                    Foreground="{DynamicResource ButtonTextBrush}"/>
-                            <TextBlock Grid.Column="2" Text="{Binding FontSizeDisplayText}"
-                                       VerticalAlignment="Center" HorizontalAlignment="Center"
-                                       Width="60" TextAlignment="Center"
-                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
-                            <Button Grid.Column="3" Content=" + " Padding="6,2" Margin="4,0,8,0"
-                                    Command="{Binding IncreaseFontSizeCommand}"
-                                    Background="{DynamicResource ButtonBackgroundBrush}"
-                                    Foreground="{DynamicResource ButtonTextBrush}"/>
-                            <Button Grid.Column="4" Content="Reset" Padding="6,2"
-                                    Command="{Binding ResetFontSizeCommand}"
-                                    Background="{DynamicResource ButtonBackgroundBrush}"
-                                    Foreground="{DynamicResource ButtonTextBrush}"/>
-                        </Grid>
-                        <TextBlock Text="Adjust font size for all windows (live preview)"
-                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,2,0,0"/>
 
                         <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
 
@@ -193,6 +163,189 @@
                                        Foreground="{DynamicResource SecondaryTextBrush}" Margin="10,0,0,0"/>
                         </StackPanel>
 
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Appearance Tab -->
+            <TabItem Header="Appearance">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="15">
+                        <!-- Theme Preset -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Theme"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                            <TextBlock Text="Preset:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <ComboBox Width="200"
+                                      ItemsSource="{Binding AvailablePresets}"
+                                      SelectedValue="{Binding ThemePreset}"
+                                      SelectedValuePath="Key"
+                                      DisplayMemberPath="DisplayName"/>
+                            <Button Content="Reset Colors" Padding="8,4" Margin="10,0,0,0"
+                                    Command="{Binding ResetAllColorsCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                        </StackPanel>
+
+                        <!-- Save / Update / Delete custom theme -->
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <TextBlock Text="Save as:" VerticalAlignment="Center" Margin="0,0,8,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"/>
+                            <TextBox Width="140" Text="{Binding CustomThemeName, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="{DynamicResource InputBackgroundBrush}"
+                                     Foreground="{DynamicResource PrimaryTextBrush}"
+                                     BorderBrush="{DynamicResource BorderBrush}"
+                                     VerticalContentAlignment="Center" Padding="4,2"/>
+                            <Button Content="Save" Padding="8,3" Margin="6,0,0,0"
+                                    Command="{Binding SaveCustomThemeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <Button Content="Update" Padding="8,3" Margin="6,0,0,0"
+                                    Command="{Binding UpdateCustomThemeCommand}"
+                                    Visibility="{Binding IsCustomPresetSelected, Converter={StaticResource BoolToVisibility}}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <Button Content="Delete" Padding="8,3" Margin="6,0,0,0"
+                                    Command="{Binding DeleteCustomThemeCommand}"
+                                    Visibility="{Binding IsCustomPresetSelected, Converter={StaticResource BoolToVisibility}}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource DangerBrush}"/>
+                        </StackPanel>
+
+                        <Separator Margin="0,10,0,5" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Font Section -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Font" Margin="0,5,0,8"/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
+                            <TextBlock Text="Font Family:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <ComboBox Width="180"
+                                      ItemsSource="{Binding AvailableFonts}"
+                                      SelectedItem="{Binding FontFamily}"/>
+                        </StackPanel>
+
+                        <Grid Margin="0,5,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Font Size:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <Button Grid.Column="1" Content=" - " Padding="6,2" Margin="0,0,4,0"
+                                    Command="{Binding DecreaseFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <TextBlock Grid.Column="2" Text="{Binding FontSizeDisplayText}"
+                                       VerticalAlignment="Center" HorizontalAlignment="Center"
+                                       Width="60" TextAlignment="Center"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"/>
+                            <Button Grid.Column="3" Content=" + " Padding="6,2" Margin="4,0,8,0"
+                                    Command="{Binding IncreaseFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                            <Button Grid.Column="4" Content="Reset" Padding="6,2"
+                                    Command="{Binding ResetFontSizeCommand}"
+                                    Background="{DynamicResource ButtonBackgroundBrush}"
+                                    Foreground="{DynamicResource ButtonTextBrush}"/>
+                        </Grid>
+                        <TextBlock Text="Adjust font size for all windows (live preview)"
+                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,2,0,0"/>
+
+                        <Separator Margin="0,10,0,5" Background="{DynamicResource SeparatorBrush}"/>
+
+                        <!-- Colors Section -->
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Colors" Margin="0,5,0,4"/>
+                        <TextBlock Text="Click any swatch to customize." FontSize="11"
+                                   Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,10"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Backgrounds -->
+                            <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,0,10">
+                                <TextBlock Text="Backgrounds" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ItemsControl ItemsSource="{Binding BackgroundColors}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <Border Width="20" Height="20" CornerRadius="3" Margin="0,0,8,0"
+                                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                        Background="{Binding HexColor, Converter={StaticResource HexToBrushConverter}}"
+                                                        Cursor="Hand" MouseLeftButtonDown="ColorSwatch_Click"
+                                                        Tag="{Binding}"/>
+                                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="11"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- Text -->
+                            <StackPanel Grid.Column="2" Grid.Row="0" Margin="0,0,0,10">
+                                <TextBlock Text="Text" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ItemsControl ItemsSource="{Binding TextColors}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <Border Width="20" Height="20" CornerRadius="3" Margin="0,0,8,0"
+                                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                        Background="{Binding HexColor, Converter={StaticResource HexToBrushConverter}}"
+                                                        Cursor="Hand" MouseLeftButtonDown="ColorSwatch_Click"
+                                                        Tag="{Binding}"/>
+                                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="11"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- Accent & Status -->
+                            <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,0,10">
+                                <TextBlock Text="Accent &amp; Status" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ItemsControl ItemsSource="{Binding AccentColors}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <Border Width="20" Height="20" CornerRadius="3" Margin="0,0,8,0"
+                                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                        Background="{Binding HexColor, Converter={StaticResource HexToBrushConverter}}"
+                                                        Cursor="Hand" MouseLeftButtonDown="ColorSwatch_Click"
+                                                        Tag="{Binding}"/>
+                                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="11"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+
+                            <!-- UI Elements -->
+                            <StackPanel Grid.Column="2" Grid.Row="1" Margin="0,0,0,10">
+                                <TextBlock Text="UI Elements" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                <ItemsControl ItemsSource="{Binding UiElementColors}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <Border Width="20" Height="20" CornerRadius="3" Margin="0,0,8,0"
+                                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                        Background="{Binding HexColor, Converter={StaticResource HexToBrushConverter}}"
+                                                        Cursor="Hand" MouseLeftButtonDown="ColorSwatch_Click"
+                                                        Tag="{Binding}"/>
+                                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" FontSize="11"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using DrawColor = System.Drawing.Color;
 
 namespace RVUCounter.Core;
 
@@ -82,15 +83,15 @@ public static class IconGenerator
         var rect = new Rectangle(0, 0, size, size);
         using var bgBrush = new LinearGradientBrush(
             rect,
-            Color.FromArgb(255, 26, 82, 118),   // Dark teal
-            Color.FromArgb(255, 20, 55, 90),    // Darker blue
+            DrawColor.FromArgb(255, 26, 82, 118),   // Dark teal
+            DrawColor.FromArgb(255, 20, 55, 90),    // Darker blue
             LinearGradientMode.ForwardDiagonal);
 
         // Draw circular background
         g.FillEllipse(bgBrush, 1, 1, size - 2, size - 2);
 
         // Draw subtle border
-        using var borderPen = new Pen(Color.FromArgb(100, 255, 255, 255), size / 32f);
+        using var borderPen = new Pen(DrawColor.FromArgb(100, 255, 255, 255), size / 32f);
         g.DrawEllipse(borderPen, 2, 2, size - 4, size - 4);
 
         // Center point
@@ -99,7 +100,7 @@ public static class IconGenerator
         float scale = size / 64f;
 
         // Draw stylized CT/MRI scan lines (concentric arcs)
-        using var scanPen = new Pen(Color.FromArgb(180, 200, 230, 255), size / 24f);
+        using var scanPen = new Pen(DrawColor.FromArgb(180, 200, 230, 255), size / 24f);
         scanPen.StartCap = LineCap.Round;
         scanPen.EndCap = LineCap.Round;
 
@@ -114,7 +115,7 @@ public static class IconGenerator
                   outerRadius * 2, outerRadius * 2, 45, 90);
 
         // Draw small chart bars (representing RVU tracking)
-        using var chartBrush = new SolidBrush(Color.FromArgb(220, 100, 200, 150)); // Soft green
+        using var chartBrush = new SolidBrush(DrawColor.FromArgb(220, 100, 200, 150)); // Soft green
         float barWidth = size * 0.06f;
         float barSpacing = size * 0.08f;
         float baseY = cy + size * 0.15f;
@@ -135,7 +136,7 @@ public static class IconGenerator
         // Draw "RVU" text hint (just a small white dot or accent for smaller sizes)
         if (size >= 48)
         {
-            using var accentBrush = new SolidBrush(Color.FromArgb(200, 255, 255, 255));
+            using var accentBrush = new SolidBrush(DrawColor.FromArgb(200, 255, 255, 255));
             float dotSize = size * 0.06f;
             g.FillEllipse(accentBrush, cx + size * 0.2f, cy - size * 0.25f, dotSize, dotSize);
         }

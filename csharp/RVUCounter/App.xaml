@@ -34,6 +34,10 @@
         <converters:CriticalFilterBackgroundConverter x:Key="CriticalFilterBackgroundConverter"/>
         <converters:CriticalFilterTextConverter x:Key="CriticalFilterTextConverter"/>
         <converters:InpatientStatColorConverter x:Key="InpatientStatColorConverter"/>
+        <converters:HexToBrushConverter x:Key="HexToBrushConverter"/>
+
+        <!-- Global Font Family -->
+        <FontFamily x:Key="AppFontFamily">Segoe UI</FontFamily>
 
         <!-- Global Font Sizes (can be adjusted via settings) -->
         <sys:Double x:Key="FontSizeXSmall">9</sys:Double>
@@ -45,7 +49,7 @@
 
         <!-- Global Styles -->
         <Style TargetType="TextBlock">
-            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="FontFamily" Value="{DynamicResource AppFontFamily}"/>
         </Style>
     </Application.Resources>
 </Application>
