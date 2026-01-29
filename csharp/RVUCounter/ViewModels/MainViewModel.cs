@@ -336,6 +336,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly object _clarioCacheLock = new();
     private string _lastClarioAccession = "";
 
+    // Circuit breaker for Clario enrichment — exponential backoff on repeated failures
+    private int _clarioFailureCount;
+    private DateTime _clarioBackoffUntil = DateTime.MinValue;
+
     // ===========================================
     // PATIENT INFO CACHE (Memory Only - Privacy)
     // ===========================================
@@ -1793,11 +1797,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Fire-and-forget: Clario patient class enrichment runs separately
-            // so it never blocks the current study display
+            // so it never blocks the current study display.
+            // Skip if already enriched (avoid re-scraping Clario every scan cycle).
+            // Circuit breaker: skip if in backoff period after repeated failures.
             var accession = result?.CurrentAccession;
             if (!string.IsNullOrEmpty(accession) && result?.IsMosaicRunning == true)
             {
-                _ = Task.Run(() => PerformClarioEnrichment(accession));
+                bool alreadyCached;
+                lock (_clarioCacheLock)
+                {
+                    alreadyCached = _clarioPatientClassCache.ContainsKey(accession);
+                }
+                if (!alreadyCached && DateTime.Now >= _clarioBackoffUntil)
+                {
+                    _ = Task.Run(() => PerformClarioEnrichment(accession));
+                }
             }
         }
         catch (Exception ex)
@@ -1847,11 +1861,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             if (!Utils.ClarioExtractor.IsClarioRunning())
+            {
+                RecordClarioFailure();
                 return;
+            }
 
             var clarioData = Utils.ClarioExtractor.ExtractPatientClass(targetAccession: accession);
             if (clarioData == null || string.IsNullOrEmpty(clarioData.PatientClass))
+            {
+                RecordClarioFailure();
                 return;
+            }
+
+            // Success — reset circuit breaker
+            _clarioFailureCount = 0;
+            _clarioBackoffUntil = DateTime.MinValue;
 
             Log.Debug("Clario enrichment for {Accession}: {PatientClass}",
                 accession, clarioData.PatientClass);
@@ -1869,7 +1893,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (CurrentAccession == accession)
                 {
                     CurrentPatientClass = clarioData.PatientClass;
-                    Log.Information("Clario enriched current study: {PatientClass} for {Accession}",
+                    Log.Debug("Clario enriched current study: {PatientClass} for {Accession}",
                         clarioData.PatientClass, accession);
                 }
 
@@ -1887,7 +1911,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             Log.Debug(ex, "Clario enrichment failed for {Accession}", accession);
+            RecordClarioFailure();
         }
+    }
+
+    /// <summary>
+    /// Record a Clario enrichment failure and apply exponential backoff.
+    /// Backoff: min(2^failures * 5s, 60s).
+    /// </summary>
+    private void RecordClarioFailure()
+    {
+        _clarioFailureCount++;
+        double backoffSeconds = Math.Min(Math.Pow(2, _clarioFailureCount) * 5, 60);
+        _clarioBackoffUntil = DateTime.Now.AddSeconds(backoffSeconds);
+        Log.Debug("Clario circuit breaker: failure #{Count}, backing off for {Seconds:F0}s",
+            _clarioFailureCount, backoffSeconds);
     }
 
     // Invalid procedure values that indicate "no study" (matches Python)

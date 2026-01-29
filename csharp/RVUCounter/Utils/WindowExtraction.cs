@@ -14,6 +14,7 @@ public static class WindowExtraction
 {
     private static UIA3Automation? _automation;
     private static readonly object _lock = new();
+    private static int _consecutiveComFailures;
 
     /// <summary>
     /// Get or create the UIA3 automation instance.
@@ -24,6 +25,50 @@ public static class WindowExtraction
         {
             _automation ??= new UIA3Automation();
             return _automation;
+        }
+    }
+
+    /// <summary>
+    /// Dispose and recreate the UIA3 automation singleton to recover from
+    /// degraded COM state (e.g., after sustained OOM or 0x80131505 errors).
+    /// </summary>
+    public static void RecreateAutomation()
+    {
+        lock (_lock)
+        {
+            Log.Warning("Recreating UIA3 automation instance after {Failures} consecutive COM failures",
+                _consecutiveComFailures);
+            try
+            {
+                _automation?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Error disposing old UIA3 automation instance");
+            }
+            _automation = new UIA3Automation();
+            _consecutiveComFailures = 0;
+        }
+    }
+
+    /// <summary>
+    /// Record a successful UIA operation, resetting the failure counter.
+    /// </summary>
+    private static void RecordUiaSuccess()
+    {
+        Interlocked.Exchange(ref _consecutiveComFailures, 0);
+    }
+
+    /// <summary>
+    /// Record a UIA COM failure. If consecutive failures exceed the threshold,
+    /// trigger recovery by recreating the automation instance.
+    /// </summary>
+    private static void RecordUiaFailure()
+    {
+        int failures = Interlocked.Increment(ref _consecutiveComFailures);
+        if (failures >= Core.Config.UiaConsecutiveFailuresBeforeRecovery)
+        {
+            RecreateAutomation();
         }
     }
 
@@ -57,10 +102,11 @@ public static class WindowExtraction
                     try
                     {
                         var title = window.Name;
-                        if (!string.IsNullOrEmpty(title) && 
+                        if (!string.IsNullOrEmpty(title) &&
                             title.Contains(titleContains, StringComparison.OrdinalIgnoreCase))
                         {
                             Log.Debug("Found window: {Title}", title);
+                            RecordUiaSuccess();
                             return window;
                         }
                     }
@@ -78,6 +124,7 @@ public static class WindowExtraction
         catch (Exception ex)
         {
             Log.Warning(ex, "Error finding window: {Title}", titleContains);
+            RecordUiaFailure();
             return null;
         }
     }
@@ -117,6 +164,7 @@ public static class WindowExtraction
                                 continue;
                             }
                             Log.Debug("Found window for process: {Process}", processName);
+                            RecordUiaSuccess();
                             return window;
                         }
                     }
@@ -132,6 +180,7 @@ public static class WindowExtraction
         catch (Exception ex)
         {
             Log.Warning(ex, "Error finding window by process: {Process}", processName);
+            RecordUiaFailure();
             return null;
         }
     }
@@ -162,10 +211,19 @@ public static class WindowExtraction
         {
             Log.Warning("GetDescendants timed out after {Timeout}ms", timeoutMs);
         }
+        catch (OutOfMemoryException ex)
+        {
+            Log.Warning(ex, "OOM during GetDescendants — recording COM failure");
+            RecordUiaFailure();
+        }
         catch (Exception ex)
         {
             Log.Warning(ex, "Error getting descendants");
+            RecordUiaFailure();
         }
+
+        if (result.Count > 0)
+            RecordUiaSuccess();
 
         return result;
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
@@ -115,6 +116,12 @@ public static class ClarioExtractor
             Log.Debug(ex, "Error finding Clario Chrome window");
         }
 
+        // Window not found — clear both caches so stale references don't linger
+        lock (_cacheLock)
+        {
+            _cachedChromeWindow = null;
+            _cachedContentArea = null;
+        }
         return null;
     }
 
@@ -335,11 +342,19 @@ public static class ClarioExtractor
 
     /// <summary>
     /// Recursively get all UI elements from an element (like Python's get_all_elements_clario).
+    /// Enforces element count cap and time limit to prevent OOM storms.
     /// </summary>
     private static List<ClarioElementData> GetAllElementsRecursive(AutomationElement element, int maxDepth)
     {
         var elements = new List<ClarioElementData>();
-        GetElementsRecursiveInternal(element, 0, maxDepth, elements);
+        var stopwatch = Stopwatch.StartNew();
+        int maxElements = Core.Config.ClarioMaxElements;
+        int timeoutMs = Core.Config.ClarioExtractionTimeoutMs;
+
+        GetElementsRecursiveInternal(element, 0, maxDepth, elements, maxElements, stopwatch, timeoutMs);
+
+        Log.Debug("Clario: Collected {Count} elements at max depth {Depth} in {Elapsed}ms",
+            elements.Count, maxDepth, stopwatch.ElapsedMilliseconds);
         return elements;
     }
 
@@ -347,9 +362,20 @@ public static class ClarioExtractor
         AutomationElement element,
         int depth,
         int maxDepth,
-        List<ClarioElementData> elements)
+        List<ClarioElementData> elements,
+        int maxElements,
+        Stopwatch stopwatch,
+        int timeoutMs)
     {
         if (depth > maxDepth)
+            return;
+
+        // Check element count cap
+        if (elements.Count >= maxElements)
+            return;
+
+        // Check time limit
+        if (stopwatch.ElapsedMilliseconds >= timeoutMs)
             return;
 
         try
@@ -358,17 +384,18 @@ public static class ClarioExtractor
             string name = "";
             string text = "";
 
-            try { automationId = element.Properties.AutomationId.ValueOrDefault ?? ""; } catch (Exception ex) { Log.Debug(ex, "Failed to get AutomationId"); }
-            try { name = element.Name ?? ""; } catch (Exception ex) { Log.Debug(ex, "Failed to get element Name"); }
+            // Silent catches — property access failures are expected and transient.
+            // Logging each one generates 98K lines in 5 minutes.
+            try { automationId = element.Properties.AutomationId.ValueOrDefault ?? ""; } catch { }
+            try { name = element.Name ?? ""; } catch { }
             try
             {
-                // Try to get text from Value pattern
                 if (element.Patterns.Value.IsSupported)
                 {
                     text = element.Patterns.Value.Pattern.Value.ValueOrDefault ?? "";
                 }
             }
-            catch (Exception ex) { Log.Debug(ex, "Failed to get element Value"); }
+            catch { }
 
             // Only include elements with some meaningful content
             if (!string.IsNullOrEmpty(automationId) || !string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(text))
@@ -382,18 +409,24 @@ public static class ClarioExtractor
                 });
             }
 
+            // Check caps again before recursing into children
+            if (elements.Count >= maxElements || stopwatch.ElapsedMilliseconds >= timeoutMs)
+                return;
+
             // Recursively get children
             try
             {
                 var children = element.FindAllChildren();
                 foreach (var child in children)
                 {
-                    GetElementsRecursiveInternal(child, depth + 1, maxDepth, elements);
+                    if (elements.Count >= maxElements || stopwatch.ElapsedMilliseconds >= timeoutMs)
+                        return;
+                    GetElementsRecursiveInternal(child, depth + 1, maxDepth, elements, maxElements, stopwatch, timeoutMs);
                 }
             }
-            catch (Exception ex) { Log.Debug(ex, "Failed to get children at depth {Depth}", depth); }
+            catch { /* Children enumeration can fail transiently — silent */ }
         }
-        catch (Exception ex) { Log.Debug(ex, "Error processing element at depth {Depth}", depth); }
+        catch { /* Element processing can fail transiently — silent */ }
     }
 
     /// <summary>

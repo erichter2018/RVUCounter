@@ -9,8 +9,8 @@ namespace RVUCounter.Core;
 public static class Config
 {
     // Version
-    public const string AppVersion = "3.1.0";
-    public const string AppVersionDate = "01/28/2026";
+    public const string AppVersion = "3.1.1";
+    public const string AppVersionDate = "01/29/2026";
     public const string AppName = "RVU Counter";
 
     // Folder structure
@@ -52,7 +52,11 @@ public static class Config
     public const int UiAutomationTimeoutMs = 5000;
     public const int UiAutomationMaxElements = 3000;
     public const int ClarioMaxElements = 1000;
+    public const int ClarioExtractionTimeoutMs = 10000;
     public const int MosaicScanMaxElements = 2000;
+
+    // UIA3 recovery
+    public const int UiaConsecutiveFailuresBeforeRecovery = 10;
 
     // HIPAA Migration
     public const int HipaaBatchSize = 5000;
