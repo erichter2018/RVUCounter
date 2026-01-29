@@ -211,16 +211,32 @@ The following files are NOT embedded in the executable - they're loaded from the
 - `resources/rvu_rules.yaml` - Study classification rules. Without it, all studies show as "Unknown" with 0 RVU.
 - `resources/tbwu_rules.db` - TBWU lookup database. Without it, TBWU-based compensation calculations are disabled.
 
+### Tool Paths
+- **dotnet**: `c:/Users/erik.richter/Desktop/dotnet/dotnet.exe`
+- **gh CLI**: `"C:/Users/erik.richter/Desktop/GH CLI/gh.exe"`
+
 ### Release Checklist
 1. Update version in `Core/Config.cs` (AppVersion and AppVersionDate)
-2. Build: `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`
-3. Create release folder with:
-   - `RVUCounter.exe` (from publish output)
-   - `resources/rvu_rules.yaml` (from `csharp/RVUCounter/Resources/`)
-   - `resources/tbwu_rules.db` (from `csharp/RVUCounter/Resources/`)
-4. Create zip containing exe and resources folder
-5. Create GitHub Release at https://github.com/erichter2018/RVUCounter/releases
-6. Upload both `RVUCounter.exe` and `RVUCounter.zip`
+2. Build:
+   ```bash
+   taskkill //F //IM RVUCounter.exe 2>/dev/null; sleep 1
+   c:/Users/erik.richter/Desktop/dotnet/dotnet.exe publish "C:/Users/erik.richter/Desktop/RVUCounter/csharp/RVUCounter/RVUCounter.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+   ```
+3. Copy to release folder:
+   ```bash
+   cp csharp/RVUCounter/bin/Release/net8.0-windows/win-x64/publish/RVUCounter.exe release/RVUCounter.exe
+   cp csharp/RVUCounter/Resources/rvu_rules.yaml release/resources/rvu_rules.yaml
+   cp csharp/RVUCounter/Resources/tbwu_rules.db release/resources/tbwu_rules.db
+   ```
+4. Create zip:
+   ```bash
+   cd release && rm -f RVUCounter.zip && powershell -Command "Compress-Archive -Path 'RVUCounter.exe','resources' -DestinationPath 'RVUCounter.zip' -Force"
+   ```
+5. Git commit and push
+6. Create GitHub Release with gh CLI:
+   ```bash
+   "C:/Users/erik.richter/Desktop/GH CLI/gh.exe" release create vX.Y.Z --title "vX.Y.Z - Title" --notes "release notes" release/RVUCounter.zip release/RVUCounter.exe
+   ```
 
 ### Download Links (always latest)
 - https://github.com/erichter2018/RVUCounter/releases/latest/download/RVUCounter.zip
