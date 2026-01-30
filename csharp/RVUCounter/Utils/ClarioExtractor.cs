@@ -24,7 +24,16 @@ public static class ClarioExtractor
     private static readonly string[] UrgencyTerms =
         { "STAT", "Stroke", "Urgent", "Routine", "ASAP", "CRITICAL", "IMMEDIATE", "Trauma" };
     private static readonly string[] LocationTerms =
-        { "Emergency", "Inpatient", "Outpatient", "Observation", "Ambulatory" };
+        { "Emergency", "Inpatient", "Outpatient", "Observation", "Ambulatory", "ED", "ER" };
+
+    // Modality keywords — if these appear in a priority/class value, it's likely a procedure description
+    private static readonly string[] ModalityKeywords =
+        { "CT ", "MR ", "XR ", "US ", "NM ", "PET", "FL ", "DEXA", "MAMMO", "MRI", "MRA" };
+
+    // Additional known patient class patterns beyond location terms
+    private static readonly string[] KnownClassPatterns =
+        { "Pre-Admit", "Pre Admit", "Recurring", "Rehab", "Swing Bed", "Day Surgery",
+          "Same Day", "Newborn", "Hospice", "Home Health", "Skilled Nursing", "SNF" };
 
     /// <summary>
     /// Find Chrome window with 'Clario - Worklist' tab.
@@ -430,6 +439,88 @@ public static class ClarioExtractor
     }
 
     /// <summary>
+    /// Validate that a candidate priority value looks like a real priority (e.g. "STAT ER")
+    /// and not a procedure description or patient name picked up by FindNextValue.
+    /// </summary>
+    private static bool IsValidPriority(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        // Too long — real priorities are short like "STAT ER", "Routine", "Urgent Emergency"
+        if (value.Length > 50)
+        {
+            Log.Debug("Clario: Rejecting priority (too long, {Len} chars): '{Value}'", value.Length, value);
+            return false;
+        }
+
+        // Contains modality keyword — likely a procedure description
+        if (ModalityKeywords.Any(kw => value.Contains(kw, StringComparison.OrdinalIgnoreCase)))
+        {
+            Log.Debug("Clario: Rejecting priority (contains modality keyword): '{Value}'", value);
+            return false;
+        }
+
+        // Must contain at least one recognized urgency or location term
+        bool hasRecognizedTerm =
+            UrgencyTerms.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase)) ||
+            LocationTerms.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase));
+
+        if (!hasRecognizedTerm)
+        {
+            Log.Debug("Clario: Rejecting priority (no recognized term): '{Value}'", value);
+        }
+        return hasRecognizedTerm;
+    }
+
+    /// <summary>
+    /// Validate that a candidate patient class value looks like a real patient class
+    /// (e.g. "Inpatient", "Emergency", "Pre-Admit") and not a patient name or facility.
+    /// </summary>
+    private static bool IsValidPatientClass(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        // Too long — facility names like "Rapides Regional Medical Center - Emergency Department"
+        if (value.Length > 60)
+        {
+            Log.Debug("Clario: Rejecting class (too long, {Len} chars): '{Value}'", value.Length, value);
+            return false;
+        }
+
+        // Contains modality keyword — likely a procedure description
+        if (ModalityKeywords.Any(kw => value.Contains(kw, StringComparison.OrdinalIgnoreCase)))
+        {
+            Log.Debug("Clario: Rejecting class (contains modality keyword): '{Value}'", value);
+            return false;
+        }
+
+        // Accept if contains a recognized location term
+        if (LocationTerms.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // Accept if matches a known class pattern
+        if (KnownClassPatterns.Any(p => value.Contains(p, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // Accept if contains a recognized urgency term (some systems put urgency in class field)
+        if (UrgencyTerms.Any(t => value.Contains(t, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // Reject if all words are capitalized with 2+ chars — likely a patient name ("Anterrica Myles")
+        var words = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length >= 2 && words.All(w => w.Length >= 2 && char.IsUpper(w[0]) && w.Skip(1).All(char.IsLower)))
+        {
+            Log.Debug("Clario: Rejecting class (looks like patient name): '{Value}'", value);
+            return false;
+        }
+
+        Log.Debug("Clario: Rejecting class (no recognized term): '{Value}'", value);
+        return false;
+    }
+
+    /// <summary>
     /// Extract priority, class, and accession from element data (like Python's extract_data_from_elements).
     /// </summary>
     private static ExtractedClarioData ExtractDataFromElements(List<ClarioElementData> elementData)
@@ -453,34 +544,46 @@ public static class ClarioExtractor
             // PRIORITY
             if (string.IsNullOrEmpty(data.Priority))
             {
+                string? candidatePriority = null;
                 if (!string.IsNullOrEmpty(automationId) &&
                     automationId.Contains("priority", StringComparison.OrdinalIgnoreCase))
                 {
-                    data.Priority = FindNextValue(elementData, i);
+                    candidatePriority = FindNextValue(elementData, i);
                 }
                 else if (!string.IsNullOrEmpty(name) &&
                          name.Contains("priority", StringComparison.OrdinalIgnoreCase) &&
                          name.Contains(":"))
                 {
-                    data.Priority = FindNextValue(elementData, i);
+                    candidatePriority = FindNextValue(elementData, i);
+                }
+
+                if (candidatePriority != null && IsValidPriority(candidatePriority))
+                {
+                    data.Priority = candidatePriority;
                 }
             }
 
             // CLASS (but not "priority" in automation_id)
             if (string.IsNullOrEmpty(data.Class))
             {
+                string? candidateClass = null;
                 if (!string.IsNullOrEmpty(automationId) &&
                     automationId.Contains("class", StringComparison.OrdinalIgnoreCase) &&
                     !automationId.Contains("priority", StringComparison.OrdinalIgnoreCase))
                 {
-                    data.Class = FindNextValue(elementData, i);
+                    candidateClass = FindNextValue(elementData, i);
                 }
                 else if (!string.IsNullOrEmpty(name) &&
                          name.Contains("class", StringComparison.OrdinalIgnoreCase) &&
                          name.Contains(":") &&
                          !name.Contains("priority", StringComparison.OrdinalIgnoreCase))
                 {
-                    data.Class = FindNextValue(elementData, i);
+                    candidateClass = FindNextValue(elementData, i);
+                }
+
+                if (candidateClass != null && IsValidPatientClass(candidateClass))
+                {
+                    data.Class = candidateClass;
                 }
             }
 
