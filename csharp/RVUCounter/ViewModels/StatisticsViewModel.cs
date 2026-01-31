@@ -817,63 +817,49 @@ public partial class StatisticsViewModel : ObservableObject
                 TableData.Add(new StatRow { Col1 = "Hourly Compensation Rate (TBWU)", Col2 = $"${tbwuCompPerHour:N2}/hr" });
             }
 
-            // ============ XR vs CT Efficiency ============
+            // ============ COMPENSATION ============
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = "XR vs CT Efficiency:", Col2 = "" });
-
-            var modalityGroups = records.GroupBy(r => ExtractModality(r.StudyType)).ToDictionary(g => g.Key, g => g.ToList());
-
-            // Get average rate for $100 calculations (use average of all records' rates)
-            var avgRate = records.Average(r => Core.CompensationRates.GetRate(r.Timestamp, role));
-
-            // XR stats
-            if (modalityGroups.TryGetValue("XR", out var xrRecords))
+            TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
+            if (_tbwuLookup.IsAvailable)
             {
-                var xrWithDuration = xrRecords.Where(r => r.DurationSeconds > 0).ToList();
-                if (xrWithDuration.Any())
-                {
-                    var xrTotalMinutes = xrWithDuration.Sum(r => r.DurationSeconds) / 60.0;
-                    var xrTotalRvu = xrWithDuration.Sum(r => r.Rvu);
-                    var xrRvuPerMin = xrTotalRvu / xrTotalMinutes;
-                    TableData.Add(new StatRow { Col1 = "  XR RVU per Minute", Col2 = $"{xrRvuPerMin:F3}" });
-
-                    // XR to $100 - use average rate from XR records (using TimeFinished)
-                    var xrAvgRate = xrWithDuration.Average(r => Core.CompensationRates.GetRate(r.TimeFinished ?? r.Timestamp, role));
-                    if (xrAvgRate > 0)
-                    {
-                        var rvuFor100 = 100.0 / xrAvgRate;
-                        var avgXrRvu = xrTotalRvu / xrWithDuration.Count;
-                        var studiesFor100 = rvuFor100 / avgXrRvu;
-                        var avgXrTime = xrWithDuration.Average(r => r.DurationSeconds);
-                        var timeFor100 = studiesFor100 * avgXrTime;
-                        TableData.Add(new StatRow { Col1 = $"    XR to ${100}", Col2 = $"{studiesFor100:F1} studies, {FormatDuration(timeFor100 ?? 0)}" });
-                    }
-                }
+                var summaryTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
+                TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${summaryTbwuComp:N0}" });
             }
 
-            // CT stats
-            if (modalityGroups.TryGetValue("CT", out var ctRecords))
+            // Projected Monthly Income (uses current month data)
             {
-                var ctWithDuration = ctRecords.Where(r => r.DurationSeconds > 0).ToList();
-                if (ctWithDuration.Any())
-                {
-                    var ctTotalMinutes = ctWithDuration.Sum(r => r.DurationSeconds) / 60.0;
-                    var ctTotalRvu = ctWithDuration.Sum(r => r.Rvu);
-                    var ctRvuPerMin = ctTotalRvu / ctTotalMinutes;
-                    TableData.Add(new StatRow { Col1 = "  CT RVU per Minute", Col2 = $"{ctRvuPerMin:F3}" });
+                var currentMonthName = DateTime.Now.ToString("MMMM");
+                var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                var monthEnd = monthStart.AddMonths(1);
+                var currentMonthRecords = _allRecords.Where(r => r.Timestamp >= monthStart && r.Timestamp < monthEnd).ToList();
 
-                    // CT to $100 - use average rate from CT records (using TimeFinished)
-                    var ctAvgRate = ctWithDuration.Average(r => Core.CompensationRates.GetRate(r.TimeFinished ?? r.Timestamp, role));
-                    if (ctAvgRate > 0)
+                var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
+                var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
+                var shiftLength = _dataManager.Settings.ShiftLengthHours;
+                var actualMonthHours = 0.0;
+                if (currentMonthRecords.Any())
+                {
+                    var monthShiftGroups = currentMonthRecords.GroupBy(r => r.ShiftId);
+                    foreach (var shift in monthShiftGroups)
                     {
-                        var rvuFor100 = 100.0 / ctAvgRate;
-                        var avgCtRvu = ctTotalRvu / ctWithDuration.Count;
-                        var studiesFor100 = rvuFor100 / avgCtRvu;
-                        var avgCtTime = ctWithDuration.Average(r => r.DurationSeconds);
-                        var timeFor100 = studiesFor100 * avgCtTime;
-                        TableData.Add(new StatRow { Col1 = $"    CT to ${100}", Col2 = $"{studiesFor100:F1} studies, {FormatDuration(timeFor100 ?? 0)}" });
+                        var shiftDuration = (shift.Max(r => r.Timestamp) - shift.Min(r => r.Timestamp)).TotalHours;
+                        shiftDuration = Math.Max(shiftDuration, 1);
+                        if (Math.Abs(shiftDuration - shiftLength) <= 0.5)
+                            shiftDuration = shiftLength;
+                        actualMonthHours += shiftDuration;
                     }
                 }
+
+                CheckAndResetMonthlyProjections();
+                var targetShifts = _dataManager.Settings.ProjectionDays;
+                var extraHours = _dataManager.Settings.ProjectionExtraHours;
+                var targetMonthlyHours = (targetShifts * shiftLength) + extraHours;
+                var remainingHours = Math.Max(0, targetMonthlyHours - actualMonthHours);
+
+                var projCompPerHour = actualMonthHours > 0 ? actualMonthComp / actualMonthHours : (hoursSpan > 0 ? totalComp / hoursSpan : 0);
+                var projectedMonthlyComp = actualMonthComp + (projCompPerHour * remainingHours);
+
+                TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income", Col2 = $"${projectedMonthlyComp:N0}" });
             }
 
             // ============ TIME/EFFICIENCY ============
@@ -1854,8 +1840,10 @@ public partial class StatisticsViewModel : ObservableObject
 
             // ============ Projected Income ============
             // This section uses CURRENT MONTH data regardless of selected period
+            var currentMonthName = DateTime.Now.ToString("MMMM");
+            var currentMonthYear = DateTime.Now.ToString("MMMM yyyy");
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = "PROJECTED INCOME (This Month)", Col2 = "", IsHeader = true });
+            TableData.Add(new StatRow { Col1 = $"PROJECTED INCOME ({currentMonthYear})", Col2 = "", IsHeader = true });
 
             // Get all records from current month
             var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
@@ -1913,18 +1901,18 @@ public partial class StatisticsViewModel : ObservableObject
             var projectedAnnualComp = projectedMonthlyComp * 12;
 
             // Display - hours worked first, then target total, then spinners for target settings
-            TableData.Add(new StatRow { Col1 = "Hours Worked This Month", Col2 = $"{actualMonthHours:F1}" });
-            TableData.Add(new StatRow { Col1 = "Target Monthly Hours", Col2 = $"{targetMonthlyHours:F0}" });
-            TableData.Add(new StatRow { Col1 = "Target Monthly Shifts", Col2 = $"{targetShifts}", IsEditable = true, EditKey = "ProjectionDays" });
+            TableData.Add(new StatRow { Col1 = $"Hours Worked in {currentMonthName}", Col2 = $"{actualMonthHours:F1}" });
+            TableData.Add(new StatRow { Col1 = $"Target {currentMonthName} Hours", Col2 = $"{targetMonthlyHours:F0}" });
+            TableData.Add(new StatRow { Col1 = $"Target {currentMonthName} Shifts", Col2 = $"{targetShifts}", IsEditable = true, EditKey = "ProjectionDays" });
             TableData.Add(new StatRow { Col1 = "Extra Hours", Col2 = $"{extraHours}", IsEditable = true, EditKey = "ProjectionExtraHours" });
             TableData.Add(new StatRow { Col1 = "Remaining Hours", Col2 = $"{remainingHours:F1}" });
 
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = "Actual This Month", Col2 = $"${actualMonthComp:N0} ({actualMonthRvu:F1} RVU)" });
+            TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName}", Col2 = $"${actualMonthComp:N0} ({actualMonthRvu:F1} RVU)" });
             TableData.Add(new StatRow { Col1 = "Projected Remaining", Col2 = $"${projectedRemainingComp:N0} ({projectedRemainingRvu:F1} RVU)" });
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = "Projected Monthly RVU", Col2 = $"{projectedMonthlyRvu:N0}" });
-            TableData.Add(new StatRow { Col1 = "Projected Monthly Income", Col2 = $"${projectedMonthlyComp:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} RVU", Col2 = $"{projectedMonthlyRvu:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income", Col2 = $"${projectedMonthlyComp:N0}" });
             TableData.Add(new StatRow { Col1 = "Projected Annual Income", Col2 = $"${projectedAnnualComp:N0}" });
 
             // TBWU projected income
@@ -1938,8 +1926,8 @@ public partial class StatisticsViewModel : ObservableObject
 
                 TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
                 TableData.Add(new StatRow { Col1 = "TBWU PROJECTED INCOME", Col2 = "", IsHeader = true });
-                TableData.Add(new StatRow { Col1 = "Actual This Month (TBWU)", Col2 = $"${actualMonthTbwuComp:N0}" });
-                TableData.Add(new StatRow { Col1 = "Projected Monthly Income (TBWU)", Col2 = $"${projectedMonthlyTbwuComp:N0}" });
+                TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName} (TBWU)", Col2 = $"${actualMonthTbwuComp:N0}" });
+                TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income (TBWU)", Col2 = $"${projectedMonthlyTbwuComp:N0}" });
                 TableData.Add(new StatRow { Col1 = "Projected Annual Income (TBWU)", Col2 = $"${projectedAnnualTbwuComp:N0}" });
             }
 
@@ -1947,7 +1935,7 @@ public partial class StatisticsViewModel : ObservableObject
             if (monthlyTarget > 0)
             {
                 var pctOfTarget = (projectedMonthlyRvu / monthlyTarget) * 100;
-                TableData.Add(new StatRow { Col1 = "% of Monthly Target", Col2 = $"{pctOfTarget:F0}% ({projectedMonthlyRvu:F0}/{monthlyTarget:F0})" });
+                TableData.Add(new StatRow { Col1 = $"% of {currentMonthName} Target", Col2 = $"{pctOfTarget:F0}% ({projectedMonthlyRvu:F0}/{monthlyTarget:F0})" });
             }
 
             // ============ By Modality ============
