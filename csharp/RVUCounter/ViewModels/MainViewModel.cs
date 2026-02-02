@@ -35,6 +35,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // Track last sent shift info to avoid redundant sends
     private double _lastSentTotalRvu = -1;
     private int _lastSentRecordCount = -1;
+    private double _lastSentCurrentHourRvu = -1;
+    private double _lastSentPriorHourRvu = -1;
+    private double _lastSentEstimatedTotalRvu = -1;
 
     /// <summary>
     /// Exposes DataManager for dialogs that need access to settings/database
@@ -442,6 +445,78 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return string.Join("\n", parts);
     }
 
+    // ===========================================
+    // DISTRACTION ALERT
+    // ===========================================
+    // Average duration by study type — cached from database, refreshed periodically
+    private Dictionary<string, double> _avgDurationByStudyType = new();
+    private DateTime _avgDurationCacheTime = DateTime.MinValue;
+
+    // Track which alerts have been sent: accession → last alert level sent
+    private readonly Dictionary<string, int> _distractionAlertsSent = new();
+    private string _distractionAlertCurrentAccession = "";
+
+    /// <summary>
+    /// Refresh the average duration cache from the database (all-time).
+    /// Called on shift start and periodically.
+    /// </summary>
+    private void RefreshAverageDurationCache()
+    {
+        try
+        {
+            _avgDurationByStudyType = _dataManager.Database.GetAverageDurations();
+            _avgDurationCacheTime = DateTime.Now;
+            Log.Debug("Refreshed avg duration cache: {Count} study types", _avgDurationByStudyType.Count);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to refresh average duration cache");
+        }
+    }
+
+    /// <summary>
+    /// Check if the current study has been open too long and send a distraction alert via pipe.
+    /// Called from ApplyScanResults after updating CurrentDuration.
+    /// </summary>
+    private void CheckDistractionAlert(string accession, string studyType, double trackedSeconds)
+    {
+        var settings = _dataManager.Settings;
+        if (!settings.DistractionAlertEnabled) return;
+        if (_pipeClient == null || !_pipeClient.IsConnected) return;
+
+        // If accession changed, reset alert tracking
+        if (accession != _distractionAlertCurrentAccession)
+        {
+            _distractionAlertsSent.Clear();
+            _distractionAlertCurrentAccession = accession;
+        }
+
+        // Refresh cache every 30 minutes
+        if ((DateTime.Now - _avgDurationCacheTime).TotalMinutes > 30)
+        {
+            RefreshAverageDurationCache();
+        }
+
+        // Get expected duration for this study type
+        double expectedSeconds = settings.DistractionAlertFallbackSeconds;
+        if (_avgDurationByStudyType.TryGetValue(studyType, out var avgDuration) && avgDuration > 0)
+        {
+            expectedSeconds = avgDuration;
+        }
+
+        // Calculate current threshold: multiplier + (alertLevel - 1) * escalationStep
+        // First alert at multiplier (e.g. 2.0x), next at multiplier + step (e.g. 3.0x), etc.
+        int lastLevel = _distractionAlertsSent.TryGetValue(accession, out var lvl) ? lvl : 0;
+        int nextLevel = lastLevel + 1;
+        double threshold = expectedSeconds * (settings.DistractionAlertMultiplier + (nextLevel - 1) * settings.DistractionAlertEscalationStep);
+
+        if (trackedSeconds >= threshold)
+        {
+            _distractionAlertsSent[accession] = nextLevel;
+            _pipeClient.SendDistractionAlert(studyType, trackedSeconds, expectedSeconds, nextLevel);
+        }
+    }
+
     // MosaicTools integration - pending studies waiting for signed/unsigned confirmation
     private readonly Dictionary<string, PendingStudy> _pendingStudies = new();
     private readonly object _pendingStudiesLock = new();
@@ -458,6 +533,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // Inactivity auto-end feature (Python parity)
     private const int InactivityThresholdSeconds = 3600;  // 1 hour of no studies = auto-end shift
     private DateTime? _lastStudyRecordedTime;
+    private DateTime? _lastMosaicActivityTime;  // Updated whenever Mosaic shows a valid accession
 
     // Pace car time-of-day vs elapsed time constants (Python parity)
     private const int TypicalShiftStartHour = 23;  // 11pm
@@ -975,6 +1051,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _fatigueTimer.Start();
             _fatigueDetector.StartNewShift(shift.ShiftStart);
             ShowFatigueWarning = false;
+
+            // Pre-load average durations for distraction alert
+            RefreshAverageDurationCache();
         }
         else
         {
@@ -1052,80 +1131,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (updateInfo?.IsUpdateAvailable == true)
                 {
-                    // Check if user skipped this version
-                    if (_dataManager.Settings.SkippedVersion == updateInfo.Version)
+                    Log.Information("Update available: {Version}, applying silently", updateInfo.Version);
+
+                    if (string.IsNullOrEmpty(updateInfo.DownloadUrl))
                     {
-                        Log.Information("Update {Version} was previously skipped", updateInfo.Version);
+                        Log.Warning("Update {Version} has no download URL", updateInfo.Version);
                         return;
                     }
 
-                    Log.Information("Update available: {Version}", updateInfo.Version);
+                    StatusMessage = $"Updating to v{updateInfo.Version}...";
 
-                    // Prompt user on UI thread - get the result synchronously, then download on background
-                    var userChoice = await Application.Current.Dispatcher.InvokeAsync(() =>
+                    var success = await updateManager.DownloadAndApplyUpdateAsync(
+                        updateInfo.DownloadUrl);
+
+                    if (success)
                     {
-                        return MessageBox.Show(
-                            $"A new version is available: v{updateInfo.Version}\n\n" +
-                            $"Release: {updateInfo.Name}\n" +
-                            $"Size: {updateInfo.AssetSizeDisplay}\n\n" +
-                            "Would you like to download and install it now?\n\n" +
-                            "Click 'No' to skip this version.",
-                            "Update Available",
-                            MessageBoxButton.YesNoCancel,
-                            MessageBoxImage.Information);
-                    });
-
-                    if (userChoice == MessageBoxResult.Yes)
-                    {
-                        if (string.IsNullOrEmpty(updateInfo.DownloadUrl))
-                        {
-                            StatusMessage = "No download URL";
-                            UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
-                            return;
-                        }
-
-                        StatusMessage = "Downloading update...";
-
-                        var success = await updateManager.DownloadAndApplyUpdateAsync(
-                            updateInfo.DownloadUrl);
-
-                        if (success)
-                        {
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
-                            {
-                                MessageBox.Show(
-                                    "Update downloaded successfully.\n\n" +
-                                    "The application will now restart to apply the update.",
-                                    "Update Ready",
-                                    MessageBoxButton.OK,
-                                    MessageBoxImage.Information);
-                            });
-
-                            UpdateManager.RestartApp();
-                        }
-                        else
-                        {
-                            StatusMessage = "Update failed";
-                            await Application.Current.Dispatcher.InvokeAsync(() =>
-                            {
-                                MessageBox.Show(
-                                    "Failed to download or apply the update.\n\n" +
-                                    "You can download it manually from the releases page.",
-                                    "Update Failed",
-                                    MessageBoxButton.OK,
-                                    MessageBoxImage.Warning);
-                            });
-                            UpdateManager.OpenReleasePage(updateInfo.ReleaseUrl);
-                        }
+                        Log.Information("Update applied successfully, restarting");
+                        UpdateManager.RestartApp();
                     }
-                    else if (userChoice == MessageBoxResult.No)
+                    else
                     {
-                        // User chose to skip this version
-                        _dataManager.Settings.SkippedVersion = updateInfo.Version;
-                        _dataManager.SaveSettings();
-                        Log.Information("User skipped update {Version}", updateInfo.Version);
+                        Log.Warning("Silent update failed for {Version}", updateInfo.Version);
+                        StatusMessage = "Update failed";
                     }
-                    // Cancel = do nothing, will ask again next time
                 }
                 else
                 {
@@ -1739,19 +1767,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var totalRvu = TotalRvu;
         var recordCount = StudyCount;
+        var currentHourRvu = ProjectedThisHour;
+        var priorHourRvu = LastFullHourRvu;
+        var estimatedTotalRvu = ProjectedShiftTotal;
 
         // Only send if values changed
-        if (totalRvu == _lastSentTotalRvu && recordCount == _lastSentRecordCount)
+        if (totalRvu == _lastSentTotalRvu && recordCount == _lastSentRecordCount &&
+            currentHourRvu == _lastSentCurrentHourRvu && priorHourRvu == _lastSentPriorHourRvu &&
+            estimatedTotalRvu == _lastSentEstimatedTotalRvu)
             return;
 
         _lastSentTotalRvu = totalRvu;
         _lastSentRecordCount = recordCount;
+        _lastSentCurrentHourRvu = currentHourRvu;
+        _lastSentPriorHourRvu = priorHourRvu;
+        _lastSentEstimatedTotalRvu = estimatedTotalRvu;
 
         _pipeClient.SendShiftInfo(
             totalRvu,
             recordCount,
             _shiftStart?.ToString("o"),
-            IsShiftActive);
+            IsShiftActive,
+            currentHourRvu,
+            priorHourRvu,
+            estimatedTotalRvu);
     }
 
     private bool _isScanning = false;
@@ -1945,6 +1984,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var currentPatientName = studyData?.PatientName;
             var currentSiteCode = studyData?.SiteCode;
             var currentTime = DateTime.Now;
+
+            // Update Mosaic activity time whenever we see a valid accession
+            // This prevents the inactivity auto-end from firing while the user is actively reading
+            if (!string.IsNullOrEmpty(currentAccession))
+            {
+                _lastMosaicActivityTime = currentTime;
+            }
 
             // Store patient name, site code, MRN, and original accession in memory (never persisted to DB)
             if (!string.IsNullOrEmpty(currentAccession))
@@ -2147,7 +2193,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentStudyType = "Multiple";
                 CurrentStudyRvu = _multiAccessionData.Sum(m => m.Value.Rvu);
                 CurrentDuration = _multiAccessionStartTime != null
-                    ? $"({FormatDuration((currentTime - _multiAccessionStartTime.Value).TotalSeconds)})"
+                    ? FormatDurationWithAvg((currentTime - _multiAccessionStartTime.Value).TotalSeconds, "Multiple")
                     : "";
                 IsCurrentStudyAlreadyRecorded = false;
                 CurrentAccessionDisplay = $"Multi: {allAccessions.Count}";
@@ -2337,7 +2383,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var trackedStudy = _studyTracker.GetStudy(currentAccession);
                     if (trackedStudy != null)
                     {
-                        CurrentDuration = $"({FormatDuration(trackedStudy.TrackedSeconds)})";
+                        CurrentDuration = FormatDurationWithAvg(trackedStudy.TrackedSeconds, CurrentStudyType);
+
+                        // Check if study has been open too long → send distraction alert
+                        CheckDistractionAlert(currentAccession, CurrentStudyType, trackedStudy.TrackedSeconds);
                     }
                     else
                     {
@@ -2386,6 +2435,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (secs < 60)
             return $"{secs}s";
         return $"{secs / 60}m {secs % 60}s";
+    }
+
+    /// <summary>
+    /// Formats current duration with optional avg duration when distraction alert is enabled.
+    /// Example: "(1m 23s  avg 2m 05s)" or "(1m 23s)" if disabled/no avg.
+    /// </summary>
+    private string FormatDurationWithAvg(double totalSeconds, string studyType)
+    {
+        var current = FormatDuration(totalSeconds);
+        if (_dataManager.Settings.DistractionAlertEnabled &&
+            _avgDurationByStudyType.TryGetValue(studyType, out var avgSeconds) && avgSeconds > 0)
+        {
+            var avgSecs = (int)avgSeconds;
+            var avg = avgSecs < 60 ? $"{avgSecs}s" : $"{avgSecs / 60}m {avgSecs % 60:D2}s";
+            return $"({current}  avg {avg})";
+        }
+        return $"({current})";
     }
 
     /// <summary>
@@ -2575,14 +2641,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             CalculateAndUpdateStats();
 
             // Check for inactivity auto-end (Python parity)
-            // If no studies recorded for InactivityThresholdSeconds (1 hour), auto-end shift
-            if (_lastStudyRecordedTime != null)
+            // If no studies recorded AND no Mosaic activity for InactivityThresholdSeconds (1 hour), auto-end shift
+            // Use the most recent of _lastStudyRecordedTime and _lastMosaicActivityTime
+            // so that actively working on a study (visible in Mosaic) prevents auto-end
+            var lastActivity = _lastStudyRecordedTime;
+            if (_lastMosaicActivityTime != null && (lastActivity == null || _lastMosaicActivityTime > lastActivity))
+                lastActivity = _lastMosaicActivityTime;
+            if (lastActivity != null)
             {
-                var secondsSinceLastStudy = (DateTime.Now - _lastStudyRecordedTime.Value).TotalSeconds;
-                if (secondsSinceLastStudy >= InactivityThresholdSeconds)
+                var secondsSinceLastActivity = (DateTime.Now - lastActivity.Value).TotalSeconds;
+                if (secondsSinceLastActivity >= InactivityThresholdSeconds)
                 {
                     Log.Information("Auto-ending shift due to {Seconds:F0}s of inactivity (threshold: {Threshold}s)",
-                        secondsSinceLastStudy, InactivityThresholdSeconds);
+                        secondsSinceLastActivity, InactivityThresholdSeconds);
 
                     // End shift at the time of the last study
                     _dataManager.Database.EndCurrentShift(_lastStudyRecordedTime.Value);
@@ -2592,6 +2663,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _effectiveShiftStart = null;
                     _projectedShiftEnd = null;
                     _lastStudyRecordedTime = null;
+                    _lastMosaicActivityTime = null;
 
                     _statsTimer.Stop();
                     _fatigueTimer.Stop();
@@ -2777,6 +2849,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _fatigueTimer.Start();
         _fatigueDetector.StartNewShift(now);
         ShowFatigueWarning = false;
+
+        // Pre-load average durations for distraction alert
+        RefreshAverageDurationCache();
 
         CalculateAndUpdateStats();
         UpdateRecentStudiesDisplay();
@@ -3480,11 +3555,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _refreshTimer.Tick -= OnRefreshTick;
         _refreshTimer.Stop();
+        _statsTimer.Tick -= OnStatsTick;
         _statsTimer.Stop();
+        _fatigueTimer.Tick -= OnFatigueTick;
         _fatigueTimer.Stop();
+        _backupTimer.Tick -= OnBackupTick;
         _backupTimer.Stop();
-        _pendingStudiesTimer?.Stop();
+        if (_pendingStudiesTimer != null)
+        {
+            _pendingStudiesTimer.Tick -= OnPendingStudiesTimerTick;
+            _pendingStudiesTimer.Stop();
+        }
         _teamSyncTimer?.Stop();
         _teamSyncService?.Dispose();
         StopPipeClient();
