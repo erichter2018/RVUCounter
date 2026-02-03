@@ -101,6 +101,12 @@ public class UserSettings
     public string MiniMetric1 { get; set; } = "pace";
     public string MiniMetric2 { get; set; } = "current_total";
 
+    // Distraction alert (sends beep to MosaicTools when study open too long)
+    public bool DistractionAlertEnabled { get; set; } = false;
+    public double DistractionAlertMultiplier { get; set; } = 2.0;       // alert at 2x avg duration
+    public int DistractionAlertFallbackSeconds { get; set; } = 180;     // 3 min fallback when no history
+    public double DistractionAlertEscalationStep { get; set; } = 1.0;   // re-alert every +1x multiplier
+
     // Pace comparison mode
     public string PaceComparisonMode { get; set; } = "best_week";  // Python default: "best_week"
 

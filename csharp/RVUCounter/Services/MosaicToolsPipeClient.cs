@@ -98,7 +98,8 @@ public sealed class MosaicToolsPipeClient : IDisposable
     /// Send current shift info to MosaicTools.
     /// Safe to call from any thread; silently ignored if not connected.
     /// </summary>
-    public void SendShiftInfo(double totalRvu, int recordCount, string? shiftStart, bool isActive)
+    public void SendShiftInfo(double totalRvu, int recordCount, string? shiftStart, bool isActive,
+                              double? currentHourRvu = null, double? priorHourRvu = null, double? estimatedTotalRvu = null)
     {
         var msg = new PipeMessage
         {
@@ -106,7 +107,10 @@ public sealed class MosaicToolsPipeClient : IDisposable
             TotalRvu = totalRvu,
             RecordCount = recordCount,
             ShiftStart = shiftStart,
-            IsShiftActive = isActive
+            IsShiftActive = isActive,
+            CurrentHourRvu = currentHourRvu,
+            PriorHourRvu = priorHourRvu,
+            EstimatedTotalRvu = estimatedTotalRvu
         };
 
         SendMessage(msg);
@@ -302,6 +306,28 @@ public sealed class MosaicToolsPipeClient : IDisposable
         }
     }
 
+    // --- Send distraction_alert to MosaicTools ---
+
+    /// <summary>
+    /// Send a distraction alert to MosaicTools when a study has been open too long.
+    /// MosaicTools will play escalating beeps based on alertLevel.
+    /// </summary>
+    public void SendDistractionAlert(string? studyType, double elapsedSeconds, double expectedSeconds, int alertLevel)
+    {
+        var msg = new PipeMessage
+        {
+            Type = "distraction_alert",
+            StudyType = studyType,
+            ElapsedSeconds = elapsedSeconds,
+            ExpectedSeconds = expectedSeconds,
+            AlertLevel = alertLevel
+        };
+
+        SendMessage(msg);
+        Log.Information("Pipe: Sent distraction_alert level={Level} for {StudyType} (elapsed={Elapsed:F0}s, expected={Expected:F0}s)",
+            alertLevel, studyType ?? "Unknown", elapsedSeconds, expectedSeconds);
+    }
+
     // --- Internal: cleanup ---
 
     private void DisconnectPipe()
@@ -383,6 +409,28 @@ internal class PipeMessage
 
     [JsonPropertyName("isShiftActive")]
     public bool? IsShiftActive { get; set; }
+
+    [JsonPropertyName("currentHourRvu")]
+    public double? CurrentHourRvu { get; set; }
+
+    [JsonPropertyName("priorHourRvu")]
+    public double? PriorHourRvu { get; set; }
+
+    [JsonPropertyName("estimatedTotalRvu")]
+    public double? EstimatedTotalRvu { get; set; }
+
+    // distraction_alert fields (RVU → MT)
+    [JsonPropertyName("studyType")]
+    public string? StudyType { get; set; }
+
+    [JsonPropertyName("elapsedSeconds")]
+    public double? ElapsedSeconds { get; set; }
+
+    [JsonPropertyName("expectedSeconds")]
+    public double? ExpectedSeconds { get; set; }
+
+    [JsonPropertyName("alertLevel")]
+    public int? AlertLevel { get; set; }
 }
 
 /// <summary>Study data received from MosaicTools via pipe.</summary>

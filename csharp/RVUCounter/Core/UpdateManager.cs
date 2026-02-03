@@ -44,11 +44,6 @@ public class UpdateManager
     /// </summary>
     public static string GetCurrentVersion()
     {
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        if (version != null)
-        {
-            return $"{version.Major}.{version.Minor}.{version.Build}";
-        }
         return Config.AppVersion;
     }
 

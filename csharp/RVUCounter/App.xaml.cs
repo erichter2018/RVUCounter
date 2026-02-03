@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Threading;
 using System.Windows;
 using System.Windows.Data;
 
@@ -9,6 +10,33 @@ namespace RVUCounter;
 /// </summary>
 public partial class App : Application
 {
+    private Mutex? _singleInstanceMutex;
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        const string mutexName = "Global\\RVUCounter_SingleInstance_E7A3F2";
+        _singleInstanceMutex = new Mutex(true, mutexName, out bool createdNew);
+
+        if (!createdNew)
+        {
+            MessageBox.Show(
+                "RVU Counter is already running.\n\nOnly one instance can run at a time to prevent database conflicts.",
+                "RVU Counter",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            Shutdown();
+            return;
+        }
+
+        base.OnStartup(e);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _singleInstanceMutex?.ReleaseMutex();
+        _singleInstanceMutex?.Dispose();
+        base.OnExit(e);
+    }
 }
 
 /// <summary>

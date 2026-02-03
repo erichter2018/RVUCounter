@@ -133,7 +133,11 @@ public partial class MainWindow : Window
             {
                 var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(lParam);
                 var messageType = cds.dwData.ToInt32();
-                var accession = Marshal.PtrToStringUni(cds.lpData);
+
+                if (cds.cbData <= 0 || cds.lpData == IntPtr.Zero)
+                    return IntPtr.Zero;
+
+                var accession = Marshal.PtrToStringUni(cds.lpData, cds.cbData / sizeof(char));
 
                 if (!string.IsNullOrEmpty(accession))
                 {

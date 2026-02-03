@@ -361,9 +361,20 @@ public partial class ToolsViewModel : ObservableObject
                     report.AppendLine();
                 }
 
+                // 5. Fix shift end times (set to 1 minute after last study)
+                var repair = new DatabaseRepair(_dataManager);
+                var shiftEndsFixed = repair.FixShiftEndTimes();
+
+                if (shiftEndsFixed > 0)
+                {
+                    report.AppendLine($"SHIFT ENDS: Fixed {shiftEndsFixed} shift end times");
+                    report.AppendLine($"  (set to 1 minute after last study in each shift)");
+                    report.AppendLine();
+                }
+
                 // Summary
                 report.AppendLine("─────────────────────────────────");
-                var totalFixed = duplicatesRemoved + orphansFixed + fixedRvuCount + fixedTypeCount;
+                var totalFixed = duplicatesRemoved + orphansFixed + fixedRvuCount + fixedTypeCount + shiftEndsFixed;
                 if (totalFixed == 0)
                 {
                     report.AppendLine("No issues found to fix.");

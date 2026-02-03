@@ -165,6 +165,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
@@ -229,8 +230,25 @@
                 </Grid>
             </Border>
 
+            <!-- Trends Options Bar (only visible in Trends view) -->
+            <Border Grid.Row="2" Background="{DynamicResource CardBackgroundBrush}" Padding="12,6"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Visibility="{Binding IsTrendsView, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Metric:" Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <RadioButton Content="Total RVU" GroupName="TrendMetric" Foreground="{DynamicResource PrimaryTextBrush}"
+                                 IsChecked="{Binding TrendMetric, Converter={StaticResource StringToBoolConverter}, ConverterParameter=rvu}"
+                                 VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <RadioButton Content="RVU/h" GroupName="TrendMetric" Foreground="{DynamicResource PrimaryTextBrush}"
+                                 IsChecked="{Binding TrendMetric, Converter={StaticResource StringToBoolConverter}, ConverterParameter=rvuPerHour}"
+                                 VerticalAlignment="Center" Margin="0,0,24,0"/>
+                    <CheckBox Content="Ignore short shifts" IsChecked="{Binding TrendIgnoreShortShifts}"
+                              Foreground="{DynamicResource SecondaryTextBrush}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+
             <!-- Charts - shown based on IsChartVisible (combines view setting + user toggle) -->
-            <Grid Grid.Row="2" Height="300" Margin="12,0,12,12"
+            <Grid Grid.Row="3" Height="300" Margin="12,0,12,12"
                   Visibility="{Binding IsChartVisible, Converter={StaticResource BoolToVisibility}}">
                 <lvc:CartesianChart Series="{Binding ChartSeries}" XAxes="{Binding XAxes}" YAxes="{Binding YAxes}"
                                     Visibility="{Binding ShowCartesianChart, Converter={StaticResource BoolToVisibility}}"/>
@@ -240,7 +258,7 @@
             </Grid>
 
             <!-- Data Table with optional side charts -->
-            <Grid Grid.Row="3">
+            <Grid Grid.Row="4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition x:Name="ChartsSplitterColumn" Width="Auto"/>
@@ -602,17 +620,24 @@
                                       Visibility="{Binding ShowSideBarChart, Converter={StaticResource InverseBoolToVisibility}}"/>
 
                         <!-- Bar Chart with custom legend (for compensation view) -->
-                        <StackPanel Grid.Row="2"
-                                    Visibility="{Binding ShowSideBarChart, Converter={StaticResource BoolToVisibility}}">
-                            <lvc:CartesianChart Series="{Binding SideBarSeries}"
+                        <Grid Grid.Row="2"
+                              Visibility="{Binding ShowSideBarChart, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <lvc:CartesianChart Grid.Row="0"
+                                                Series="{Binding SideBarSeries}"
                                                 XAxes="{Binding SideBarXAxes}"
                                                 YAxes="{Binding SideBarYAxes}"
+                                                Sections="{Binding SideBarSections}"
                                                 TooltipPosition="Hidden"
                                                 LegendPosition="Hidden"
-                                                MinHeight="220"
-                                                Margin="5,0"/>
+                                                MinHeight="400"
+                                                Margin="5,0"
+                                                VerticalAlignment="Stretch"/>
                             <!-- Custom Legend -->
-                            <ItemsControl ItemsSource="{Binding BarChartLegendItems}"
+                            <ItemsControl Grid.Row="1" ItemsSource="{Binding BarChartLegendItems}"
                                           HorizontalAlignment="Center" Margin="0,5,0,0">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -633,7 +658,7 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </StackPanel>
+                        </Grid>
 
                         <!-- Second Chart (only for views that need it) -->
                         <TextBlock Grid.Row="3" Text="{Binding SecondChartTitle}"
@@ -656,7 +681,7 @@
             </Grid>
 
             <!-- Summary Bar -->
-            <Border Grid.Row="4" Background="{DynamicResource HeaderBackgroundBrush}" Padding="12,8">
+            <Border Grid.Row="5" Background="{DynamicResource HeaderBackgroundBrush}" Padding="12,8">
                 <TextBlock Text="{Binding SummaryText}" Foreground="{DynamicResource HeaderTextBrush}" FontWeight="SemiBold"/>
             </Border>
         </Grid>

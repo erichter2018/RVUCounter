@@ -114,6 +114,19 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int _mosaicToolsTimeoutSeconds;
 
+    // Distraction alert
+    [ObservableProperty]
+    private bool _distractionAlertEnabled;
+
+    [ObservableProperty]
+    private double _distractionAlertMultiplier;
+
+    [ObservableProperty]
+    private int _distractionAlertFallbackSeconds;
+
+    [ObservableProperty]
+    private double _distractionAlertEscalationStep;
+
     // Auto-update
     [ObservableProperty]
     private bool _autoUpdateEnabled;
@@ -1065,6 +1078,10 @@ public partial class SettingsViewModel : ObservableObject
         IgnoreDuplicateAccessions = settings.IgnoreDuplicateAccessions;
         MosaicToolsIntegrationEnabled = settings.MosaicToolsIntegrationEnabled;
         MosaicToolsTimeoutSeconds = settings.MosaicToolsTimeoutSeconds;
+        DistractionAlertEnabled = settings.DistractionAlertEnabled;
+        DistractionAlertMultiplier = settings.DistractionAlertMultiplier;
+        DistractionAlertFallbackSeconds = settings.DistractionAlertFallbackSeconds;
+        DistractionAlertEscalationStep = settings.DistractionAlertEscalationStep;
         AutoUpdateEnabled = settings.AutoUpdateEnabled;
 
         // Counter visibility
@@ -1134,6 +1151,10 @@ public partial class SettingsViewModel : ObservableObject
         settings.IgnoreDuplicateAccessions = IgnoreDuplicateAccessions;
         settings.MosaicToolsIntegrationEnabled = MosaicToolsIntegrationEnabled;
         settings.MosaicToolsTimeoutSeconds = MosaicToolsTimeoutSeconds;
+        settings.DistractionAlertEnabled = DistractionAlertEnabled;
+        settings.DistractionAlertMultiplier = DistractionAlertMultiplier;
+        settings.DistractionAlertFallbackSeconds = DistractionAlertFallbackSeconds;
+        settings.DistractionAlertEscalationStep = DistractionAlertEscalationStep;
         settings.AutoUpdateEnabled = AutoUpdateEnabled;
 
         // Counter visibility

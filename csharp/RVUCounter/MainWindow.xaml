@@ -650,9 +650,10 @@
                             <!-- Shows "already recorded" in red when study is already in database -->
                             <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}"
                                        Foreground="{Binding CurrentAccessionColor}"
-                                       Text="{Binding CurrentAccessionDisplay}"/>
+                                       Text="{Binding CurrentAccessionDisplay}"
+                                       TextTrimming="CharacterEllipsis"/>
                             <TextBlock Grid.Column="1" Text="{Binding CurrentDuration}" FontFamily="Consolas"
-                                       FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}"/>
+                                       FontSize="{DynamicResource FontSizeSmall}" Foreground="#CCCCCC"/>
                         </Grid>
                         <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}">
                             <Run Text="Patient Class: "/><Run Text="{Binding CurrentPatientClass}"/>
@@ -666,7 +667,8 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}">
+                            <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}"
+                                       TextTrimming="CharacterEllipsis">
                                 <Run Text="Study Type: "/><Run Text="{Binding CurrentStudyType}"/>
                             </TextBlock>
                             <TextBlock Grid.Column="1" FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}"

@@ -96,7 +96,7 @@ public static class MosaicExtractor
                         elementData.Add(new MosaicElementInfo(name.Trim(), text.Trim(), i, controlType, className));
                     }
                 }
-                catch (Exception ex) { Log.Debug("Skipping element {Index}: {Error}", i, ex.Message); }
+                catch { /* Element inaccessible - expected for some UIA elements */ }
             }
 
             // Single pass: extract all fields by recognizing labels and looking ahead
@@ -462,6 +462,21 @@ public static class MosaicExtractor
             text.StartsWith(p + " ") ||
             text.EndsWith(" " + p) ||
             text.Contains(" " + p + " ")))
+            return null;
+
+        // Reject report/findings text that structurally resembles names
+        // (e.g., "APPENDIX IS NORMAL", "LUNGS ARE CLEAR")
+        // Real patient names never contain these common English words
+        string[] nonNameWords = {
+            "IS", "ARE", "WAS", "WERE", "NO", "NOT", "THE", "AND", "FOR",
+            "WITH", "WITHOUT", "HAS", "HAVE", "HAD", "BUT", "FROM",
+            "NORMAL", "CLEAR", "SEEN", "NOTED", "ABSENT", "PRESENT",
+            "ACUTE", "STABLE", "WITHIN", "LIMITS", "UNREMARKABLE",
+            "NEGATIVE", "POSITIVE", "MILD", "MODERATE", "SEVERE"
+        };
+
+        var wordSet = new HashSet<string>(words);
+        if (nonNameWords.Any(w => wordSet.Contains(w)))
             return null;
 
         // Convert to title case for display: "MILLSON DIANA" -> "Millson Diana"

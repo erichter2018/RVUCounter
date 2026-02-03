@@ -115,24 +115,35 @@ public class DatabaseRepair
 
                 if (mismatches.Count == 0)
                 {
-                    progress?.Report(("No mismatches found", 1.0));
+                    progress?.Report(("No mismatches found. Fixing shift end times...", 0.5));
+                    result.ShiftEndsFixed = FixShiftEndTimes();
                     result.Success = true;
+                    var msg = result.ShiftEndsFixed > 0
+                        ? $"No mismatches. Fixed {result.ShiftEndsFixed} shift end times."
+                        : "No mismatches found. All shift end times OK.";
+                    progress?.Report((msg, 1.0));
                     return;
                 }
 
                 // Phase 2: Fix mismatches
-                progress?.Report(($"Fixing {mismatches.Count} records...", 0.5));
+                progress?.Report(($"Fixing {mismatches.Count} records...", 0.35));
 
                 var fixProgress = new Progress<(int Current, int Total)>(p =>
                 {
-                    var pct = 0.5 + 0.5 * p.Current / Math.Max(1, p.Total);
+                    var pct = 0.35 + 0.35 * p.Current / Math.Max(1, p.Total);
                     progress?.Report(($"Fixing: {p.Current}/{p.Total}", pct));
                 });
 
                 result.RecordsFixed = FixMismatches(mismatches, fixProgress);
+
+                // Phase 3: Fix shift end times to be 1 minute after last study
+                progress?.Report(("Fixing shift end times...", 0.7));
+                result.ShiftEndsFixed = FixShiftEndTimes();
+
                 result.Success = true;
 
-                progress?.Report(($"Fixed {result.RecordsFixed} records", 1.0));
+                var summary = $"Fixed {result.RecordsFixed} records, {result.ShiftEndsFixed} shift end times";
+                progress?.Report((summary, 1.0));
             }
             catch (Exception ex)
             {
@@ -142,6 +153,49 @@ public class DatabaseRepair
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Fix shift end times: set each completed shift's end to 1 minute after its last study.
+    /// Skips the current (active) shift.
+    /// </summary>
+    public int FixShiftEndTimes()
+    {
+        var fixCount = 0;
+        try
+        {
+            var db = _dataManager.Database;
+            var shifts = db.GetAllShifts()
+                .Where(s => s.ShiftEnd.HasValue)
+                .ToList();
+
+            foreach (var shift in shifts)
+            {
+                var records = db.GetRecordsForShift(shift.Id);
+                if (records.Count == 0) continue;
+
+                var lastRecordTime = records.Max(r => r.Timestamp);
+                var correctEnd = lastRecordTime.AddMinutes(1);
+
+                // Only fix if the difference is more than 2 minutes
+                var diff = Math.Abs((shift.ShiftEnd!.Value - correctEnd).TotalMinutes);
+                if (diff > 2)
+                {
+                    Log.Information("Fixing shift {Id} end time: {Old} -> {New} (last study at {Last})",
+                        shift.Id, shift.ShiftEnd.Value, correctEnd, lastRecordTime);
+                    db.UpdateShiftEnd(shift.Id, correctEnd);
+                    fixCount++;
+                }
+            }
+
+            if (fixCount > 0)
+                Log.Information("Fixed {Count} shift end times", fixCount);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error fixing shift end times");
+        }
+        return fixCount;
     }
 }
 
@@ -170,4 +224,5 @@ public class RepairResult
     public string? ErrorMessage { get; set; }
     public int MismatchesFound { get; set; }
     public int RecordsFixed { get; set; }
+    public int ShiftEndsFixed { get; set; }
 }

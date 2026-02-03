@@ -216,7 +216,7 @@ The following files are NOT embedded in the executable - they're loaded from the
 - **gh CLI**: `"C:/Users/erik.richter/Desktop/GH CLI/gh.exe"`
 
 ### Release Checklist
-1. Update version in `Core/Config.cs` (AppVersion and AppVersionDate)
+1. Update version in `Core/Config.cs` (AppVersion and AppVersionDate) AND in `RVUCounter.csproj` (Version, AssemblyVersion, FileVersion)
 2. Build:
    ```bash
    taskkill //F //IM RVUCounter.exe 2>/dev/null; sleep 1
@@ -577,40 +577,62 @@ The following files are NOT embedded in the executable - they're loaded from the
   - FlaUI `FindAllDescendants()` missed deep Chrome renderer elements (only 3 of 12 Edit fields) — switched to UIA condition-filtered query which finds all
   - History search field (`navigation_history_Search_textfield-inputEl`) matched before accession field — switched from keyword matching to fulltext-anchor strategy
 
-## Current State (Session End: 2026-01-26)
+### 2026-01-30 (Session 7) - Clario Patient Class Validation
+- **Problem**: `ClarioExtractor.ExtractPatientClass` used `FindNextValue()` to grab the next text element after a "priority" or "class" label in the UIA tree. The "next" element could be anything — patient names, procedure descriptions, facility names. From logs:
+  - `Priority='CT ABDOMEN PELVIS WITH IV CONTRAST'` (procedure text)
+  - `Class='Anterrica Myles'` (patient name)
+  - `Class='Rapides Regional Medical Center - Emergency Department'` (facility name)
+
+- **Fix: Post-extraction validation** in `ClarioExtractor.cs`:
+
+  - **`IsValidPriority(string)`**: Validates priority candidates
+    - Must contain a recognized urgency term (STAT, Stroke, Urgent, Routine, ASAP, CRITICAL, IMMEDIATE, Trauma) or location term (Emergency, Inpatient, Outpatient, Observation, Ambulatory, ED, ER)
+    - Rejects values >50 chars (real priorities are short like "STAT ER")
+    - Rejects values containing modality keywords (CT, MR, XR, US, NM, PET, FL, DEXA, MAMMO, MRI, MRA)
+
+  - **`IsValidPatientClass(string)`**: Validates patient class candidates
+    - Accepts recognized location terms, known class patterns (Pre-Admit, Recurring, Rehab, Swing Bed, Day Surgery, Same Day, Newborn, Hospice, Home Health, Skilled Nursing, SNF), or urgency terms
+    - Rejects values >60 chars (catches facility names)
+    - Rejects values containing modality keywords
+    - Rejects title-case multi-word patterns (catches patient names like "Anterrica Myles")
+
+  - **`ExtractDataFromElements()`** updated: `FindNextValue()` results are now validated via `IsValidPriority()` / `IsValidPatientClass()` before being assigned. Invalid values are rejected with Debug-level log messages.
+
+  - **`LocationTerms`** expanded: Added "ED" and "ER" to the recognized location terms array
+
+  - **New arrays**: `ModalityKeywords` (11 terms) and `KnownClassPatterns` (12 patterns)
+
+- **Design note**: Same core algorithm as MosaicTools (staggered depth search, label-value extraction, accession verification). The validation is an additional safety layer — MT relies solely on accession mismatch to reject garbage, which works in practice but isn't a reliable safety net if the accession happens to match.
+
+- **Version**: 3.1.2 (`Config.cs`, `RVUCounter.csproj`)
+
+### 2026-02-02 (Session 8) - Fix False Inactivity Auto-End
+- **Problem**: The inactivity auto-end feature (`InactivityThresholdSeconds = 3600`) only tracked `_lastStudyRecordedTime` — the timestamp of the last *completed* study in the database. If a radiologist spent >1 hour on a single study (e.g., a complex CTA CAP), the auto-end would fire mid-shift, resetting all counters to 0 and sending subsequent studies to "temporary" mode.
+
+- **Root cause from logs**: User was actively reading study `26P044033HUMC` (CTA CAP) from 02:00 to 02:23, continuously visible in Mosaic every second. But no study had *completed* since 01:23:02 (1 hour prior), so the inactivity timer fired. After the reset, 12+ studies completed but all went to "temporary (no shift)" instead of being counted.
+
+- **Fix**: Added `_lastMosaicActivityTime` field to `MainViewModel.cs`:
+  - Updated every scan cycle in `ApplyScanResults()` whenever a valid (non-empty) accession is extracted from Mosaic
+  - `OnStatsTick()` auto-end check now uses `max(_lastStudyRecordedTime, _lastMosaicActivityTime)` as the activity timestamp
+  - If the user has any study visible in Mosaic, the shift stays alive regardless of completion gaps
+  - Auto-end only triggers after 1 hour of truly no Mosaic activity (no valid accession extracted)
+  - `_lastMosaicActivityTime` is reset to null when shift ends (manual or auto)
+
+- **Key insight**: Between completed studies, Mosaic was extracting accessions every ~1 second (even fallback accessions like `1442300`). The previous code ignored this continuous activity because it only checked DB record timestamps.
+
+- **Version**: 3.1.4 (`Config.cs`, `RVUCounter.csproj`)
+
+## Current State (Session End: 2026-02-02)
 
 ### Last Build
-- **Status**: Successfully compiled and published
+- **Status**: Successfully compiled and published (v3.1.4)
 - **Location**: `C:\Users\erik.richter\Desktop\RVUCounter\csharp\RVUCounter\bin\Release\net8.0-windows\win-x64\publish\RVUCounter.exe`
 - **Warnings**: Only MVVM toolkit warnings (pre-existing, non-critical)
 
-### Completed This Session (Session 5)
-**Critical Results Integration with MosaicTools:**
-1. ✅ Added 2 new message types (SIGNED_CRITICAL=3, UNSIGNED_CRITICAL=4)
-2. ✅ Updated WM_COPYDATA handler to detect critical messages
-3. ✅ Added HasCriticalResult property to StudyRecord model
-4. ✅ Database schema migration for has_critical_result column
-5. ✅ All INSERT/UPDATE queries updated to include critical flag
-6. ✅ Critical results count badge in Recent Studies header
-7. ✅ ⚠️ icon shown next to studies with critical results
-8. ✅ ShowCriticalOnly filter to view only critical studies
-9. ✅ Pre-emptive signed messages preserve critical flag
-
-**Patient Name & Site Code Extraction:**
-10. ✅ Added patient name extraction from Mosaic (all-caps "LASTNAME FIRSTNAME" format)
-11. ✅ Added site code extraction from Mosaic ("Site Code: MLC" pattern)
-12. ✅ Memory-only storage (never persisted to database for privacy)
-13. ✅ Rich tooltips on Recent Studies showing patient name and site
-14. ✅ Current Study panel shows patient name and site code
-
-**UI Cleanup & Critical Filter:**
-15. ✅ Removed right-click "View Details" popup (tooltips now show all info)
-16. ✅ Added clickable critical filter button (⚠️ badge) next to Undo
-17. ✅ Button toggles between showing all studies vs critical-only
-18. ✅ Button changes color when filter is active (red = filtering)
-19. ✅ Shortened "Temporary - No shift started" to "Temporary"
-20. ✅ Updated About section with comprehensive HIPAA/privacy language
-21. ✅ Application rebuilt and published successfully
+### Completed This Session (Session 8)
+1. ✅ Diagnosed false inactivity auto-end from user log files (rvu_counter_008.log, rvu_counter_009.log)
+2. ✅ Added `_lastMosaicActivityTime` tracking to prevent auto-end while actively reading
+3. ✅ Version bumped to 3.1.4, released to GitHub
 
 ### Feature Parity Status
 The C# application now has comprehensive feature parity with Python plus:

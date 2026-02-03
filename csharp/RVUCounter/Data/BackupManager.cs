@@ -151,8 +151,8 @@ public class BackupManager
             return result;
         }
 
-        // Check if backup is due
-        if (trigger != "manual" && !ShouldBackupNow(settings))
+        // Check if backup is due (skip for manual and shift_end — both are explicit triggers)
+        if (trigger != "manual" && trigger != "shift_end" && !ShouldBackupNow(settings))
         {
             result.Message = "Backup not due yet";
             return result;

@@ -147,6 +147,50 @@
 
                         <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
 
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Distraction Alert"/>
+
+                        <CheckBox Style="{StaticResource CheckItem}" Content="Enable distraction alert (beep via MosaicTools when study open too long)" IsChecked="{Binding DistractionAlertEnabled}"/>
+                        <TextBlock Text="Plays escalating beeps through MosaicTools when a study exceeds the average read time for its type."
+                                   FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,2,0,8"/>
+
+                        <Grid Margin="0,0,0,5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SettingLabel}" Text="Alert at X times average:"/>
+                            <TextBox Grid.Column="1" Text="{Binding DistractionAlertMultiplier}" HorizontalAlignment="Left" Width="50"/>
+                            <TextBlock Grid.Column="2" Text="(e.g. 2.0 = alert at 2x avg)" VerticalAlignment="Center"
+                                       FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="8,0,0,0"/>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SettingLabel}" Text="Fallback threshold (sec):"/>
+                            <TextBox Grid.Column="1" Text="{Binding DistractionAlertFallbackSeconds}" HorizontalAlignment="Left" Width="50"/>
+                            <TextBlock Grid.Column="2" Text="(used when no history for study type)" VerticalAlignment="Center"
+                                       FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="8,0,0,0"/>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource SettingLabel}" Text="Escalation step:"/>
+                            <TextBox Grid.Column="1" Text="{Binding DistractionAlertEscalationStep}" HorizontalAlignment="Left" Width="50"/>
+                            <TextBlock Grid.Column="2" Text="(re-alert every +Nx, e.g. 1.0 = 2x, 3x, 4x...)" VerticalAlignment="Center"
+                                       FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}" Margin="8,0,0,0"/>
+                        </Grid>
+
+                        <Separator Margin="0,10" Background="{DynamicResource SeparatorBrush}"/>
+
                         <TextBlock Style="{StaticResource SectionHeader}" Text="Updates"/>
 
                         <CheckBox Style="{StaticResource CheckItem}" Content="Automatically check for updates on startup" IsChecked="{Binding AutoUpdateEnabled}"/>

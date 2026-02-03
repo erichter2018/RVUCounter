@@ -10,6 +10,7 @@ using LiveChartsCore;
 using LiveChartsCore.Measure;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
+using LiveChartsCore.SkiaSharpView.Painting.Effects;
 using SkiaSharp;
 
 namespace RVUCounter.ViewModels;
@@ -107,6 +108,9 @@ public partial class StatisticsViewModel : ObservableObject
     [ObservableProperty]
     private Axis[] _sideBarYAxes = Array.Empty<Axis>();
 
+    [ObservableProperty]
+    private RectangularSection[] _sideBarSections = Array.Empty<RectangularSection>();
+
     // Custom legend items for bar chart
     public ObservableCollection<LegendItem> BarChartLegendItems { get; } = new();
 
@@ -143,6 +147,15 @@ public partial class StatisticsViewModel : ObservableObject
 
     [ObservableProperty]
     private string _monthOverMonthChange = "";
+
+    [ObservableProperty]
+    private string _trendMetric = "rvu";  // "rvu" or "rvuPerHour"
+
+    [ObservableProperty]
+    private bool _trendIgnoreShortShifts;
+
+    partial void OnTrendMetricChanged(string value) => RefreshData();
+    partial void OnTrendIgnoreShortShiftsChanged(bool value) => RefreshData();
 
     // Heatmap view
     [ObservableProperty]
@@ -1082,6 +1095,7 @@ public partial class StatisticsViewModel : ObservableObject
         {
             TableData.Add(new StatRow { Col1 = "No data for selected period", Col2 = "" });
             SideBarSeries = Array.Empty<ISeries>();
+            SideBarSections = Array.Empty<RectangularSection>();
             return;
         }
 
@@ -1173,25 +1187,84 @@ public partial class StatisticsViewModel : ObservableObject
         // Build horizontal bar chart for side panel
         if (sortedHours.Any())
         {
-            var topHours = sortedHours.OrderByDescending(h => hourData[h].rvu).Take(8).Reverse().ToList();
-            var labels = topHours.Select(h => $"{(h % 12 == 0 ? 12 : h % 12)}{(h < 12 ? "AM" : "PM")}").ToArray();
-            var values = topHours.Select(h => hourData[h].rvu).ToArray();
+            var maxRvu = sortedHours.Max(h => hourData[h].rvu);
+            var avgRvu = sortedHours.Average(h => hourData[h].rvu);
 
+            // Reverse so shift start (first hour) is at TOP of chart (RowSeries renders index 0 at bottom)
+            var displayHours = new List<int>(sortedHours);
+            displayHours.Reverse();
+
+            var labels = displayHours.Select(h =>
+            {
+                int h12 = h % 12 == 0 ? 12 : h % 12;
+                return $"{h12}{(h < 12 ? "AM" : "PM")}";
+            }).ToArray();
+
+            var values = displayHours.Select(h => hourData[h].rvu).ToArray();
+
+            // Build study count lookup for data labels
+            var studyCounts = displayHours.Select(h => hourData[h].studies).ToArray();
+            var peakIdx = Array.IndexOf(values, values.Max());
+
+            // Gradient fill: steel blue (bottom/low) -> cornflower -> bright cyan (top/high)
             var barSeries = new RowSeries<double>
             {
                 Values = values,
                 Padding = 2,
-                MaxBarWidth = double.MaxValue,
+                MaxBarWidth = 500,
                 DataLabelsPaint = new SolidColorPaint(SKColors.White),
-                DataLabelsSize = 10,
+                DataLabelsSize = 11,
                 DataLabelsPosition = DataLabelsPosition.End,
-                DataLabelsFormatter = point => $"{point.Model:F1}",
-                Fill = new SolidColorPaint(SKColors.CornflowerBlue)
+                DataLabelsFormatter = point =>
+                {
+                    var idx = point.Index;
+                    var count = idx >= 0 && idx < studyCounts.Length ? studyCounts[idx] : 0;
+                    return $"{point.Model:F1}  ({count})";
+                },
+                Fill = new LinearGradientPaint(
+                    new[] { new SKColor(70, 130, 180), new SKColor(100, 149, 237), new SKColor(255, 195, 60) },
+                    new SKPoint(0, 1), new SKPoint(0, 0)),
+                Stroke = new SolidColorPaint(new SKColor(255, 255, 255, 40)) { StrokeThickness = 0.5f }
             };
 
             SideBarSeries = new ISeries[] { barSeries };
-            SideBarYAxes = new Axis[] { new Axis { Labels = labels, LabelsPaint = new SolidColorPaint(SKColors.White), TextSize = 11 } };
-            SideBarXAxes = new Axis[] { new Axis { LabelsPaint = new SolidColorPaint(SKColors.White), TextSize = 10, MinLimit = 0 } };
+            SideBarYAxes = new Axis[]
+            {
+                new Axis
+                {
+                    Labels = labels,
+                    LabelsPaint = new SolidColorPaint(SKColors.White),
+                    TextSize = 12,
+                    SeparatorsPaint = new SolidColorPaint(new SKColor(80, 80, 80)) { StrokeThickness = 0.5f },
+                    ShowSeparatorLines = true
+                }
+            };
+            SideBarXAxes = new Axis[]
+            {
+                new Axis
+                {
+                    LabelsPaint = new SolidColorPaint(new SKColor(200, 200, 200)),
+                    TextSize = 10,
+                    MinLimit = 0,
+                    SeparatorsPaint = new SolidColorPaint(new SKColor(80, 80, 80)) { StrokeThickness = 0.5f },
+                    ShowSeparatorLines = true
+                }
+            };
+
+            // Average RVU dashed line
+            SideBarSections = new RectangularSection[]
+            {
+                new RectangularSection
+                {
+                    Xi = avgRvu,
+                    Xj = avgRvu,
+                    Stroke = new SolidColorPaint(new SKColor(255, 255, 255, 100)) { StrokeThickness = 1.5f, PathEffect = new DashEffect(new float[] { 6, 4 }) }
+                }
+            };
+        }
+        else
+        {
+            SideBarSections = Array.Empty<RectangularSection>();
         }
     }
 
@@ -2009,6 +2082,7 @@ public partial class StatisticsViewModel : ObservableObject
             };
 
             SideBarSeries = new ISeries[] { barSeries };
+            SideBarSections = Array.Empty<RectangularSection>();
 
             // Y axis shows modality names
             SideBarYAxes = new Axis[]
@@ -2176,12 +2250,14 @@ public partial class StatisticsViewModel : ObservableObject
         foreach (var b in bodyPartData.Take(8))
         {
             var color = bodyPartColors.GetValueOrDefault(b.BodyPart, new SKColor(100, 100, 100));
+            var pct = TotalRvu > 0 ? (b.Rvu / TotalRvu * 100) : 0;
             seriesList.Add(new PieSeries<double>
             {
                 Values = new double[] { b.Rvu },
-                Name = $"{b.BodyPart}: {b.Rvu:F1}",
+                Name = $"{b.BodyPart}: {b.Rvu:F1} RVU ({pct:F0}%)",
                 Fill = new SolidColorPaint(color),
-                DataLabelsSize = 0
+                DataLabelsSize = 0,
+                ToolTipLabelFormatter = _ => string.Empty
             });
         }
         PieSeries = seriesList.ToArray();
@@ -2401,7 +2477,15 @@ public partial class StatisticsViewModel : ObservableObject
         // Determine date range based on selected period
         var (startDate, endDate) = GetDateRangeForPeriod();
 
-        var analysis = _trendService.AnalyzeTrends(startDate, endDate);
+        // Calculate minimum shift hours for filtering
+        double minShiftHours = 0;
+        if (TrendIgnoreShortShifts)
+        {
+            minShiftHours = Math.Max(0, _dataManager.Settings.ShiftLengthHours - 1.0);
+        }
+
+        var isRvuPerHour = TrendMetric == "rvuPerHour";
+        var analysis = _trendService.AnalyzeTrends(startDate, endDate, TrendMetric, minShiftHours);
 
         // Update trend properties
         TrendInsightMessage = analysis.InsightMessage;
@@ -2426,40 +2510,50 @@ public partial class StatisticsViewModel : ObservableObject
 
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
         TableData.Add(new StatRow { Col1 = "PERIOD SUMMARY", Col2 = "", IsHeader = true });
+        TableData.Add(new StatRow { Col1 = "Shifts", Col2 = analysis.TotalShifts.ToString() });
         TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{analysis.TotalRvu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = analysis.TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Daily Average", Col2 = $"{analysis.AvgDailyRvu:F1} RVU" });
+        TableData.Add(new StatRow { Col1 = "Avg RVU/Shift", Col2 = $"{analysis.AvgRvuPerShift:F1}" });
         TableData.Add(new StatRow { Col1 = "Avg RVU/Hour", Col2 = $"{analysis.AvgRvuPerHour:F1}" });
 
-        if (analysis.BestDayDate.HasValue)
+        if (analysis.BestShiftDate.HasValue)
         {
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
             TableData.Add(new StatRow { Col1 = "BEST PERFORMANCE", Col2 = "", IsHeader = true });
-            TableData.Add(new StatRow { Col1 = "Best Day", Col2 = $"{analysis.BestDayDate.Value:ddd MMM d}" });
-            TableData.Add(new StatRow { Col1 = "Best Day RVU", Col2 = $"{analysis.BestDayRvu:F1}" });
+            TableData.Add(new StatRow { Col1 = "Best Shift", Col2 = $"{analysis.BestShiftDate.Value:ddd MMM d}" });
+            TableData.Add(new StatRow { Col1 = "Best Shift RVU", Col2 = $"{analysis.BestShiftRvu:F1}" });
+            if (analysis.BestShiftRvuPerHour > 0)
+                TableData.Add(new StatRow { Col1 = "Best RVU/Hour", Col2 = $"{analysis.BestShiftRvuPerHour:F1}" });
         }
 
-        // Chart: Daily RVU with 7-day and 30-day rolling averages
-        if (analysis.DailyData.Count > 0)
+        if (TrendIgnoreShortShifts)
         {
-            var dailyValues = analysis.DailyData.Select(d => d.TotalRvu).ToArray();
-            var rolling7 = analysis.DailyData.Select(d => d.RollingAvg7Day).ToArray();
-            var rolling30 = analysis.DailyData.Select(d => d.RollingAvg30Day).ToArray();
-            var labels = analysis.DailyData.Select(d => d.Date.ToString("M/d")).ToArray();
+            TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
+            TableData.Add(new StatRow { Col1 = $"Excluding shifts < {minShiftHours:F0}h", Col2 = "" });
+        }
+
+        // Chart: per-shift values with rolling averages
+        if (analysis.ShiftData.Count > 0)
+        {
+            var metricLabel = isRvuPerHour ? "RVU/h" : "RVU";
+            var shiftValues = analysis.ShiftData.Select(d => isRvuPerHour ? d.RvuPerHour : d.TotalRvu).ToArray();
+            var rolling7 = analysis.ShiftData.Select(d => d.RollingAvg7).ToArray();
+            var rolling30 = analysis.ShiftData.Select(d => d.RollingAvg30).ToArray();
+            var labels = analysis.ShiftData.Select(d => d.Date.ToString("M/d")).ToArray();
 
             ChartSeries = new ISeries[]
             {
                 new ColumnSeries<double>
                 {
-                    Values = dailyValues,
-                    Name = "Daily RVU",
+                    Values = shiftValues,
+                    Name = $"Shift {metricLabel}",
                     Fill = new SolidColorPaint(new SKColor(66, 133, 244, 180)),
                     MaxBarWidth = 20
                 },
                 new LineSeries<double>
                 {
                     Values = rolling7,
-                    Name = "7-Day Avg",
+                    Name = "7-Shift Avg",
                     Stroke = new SolidColorPaint(new SKColor(52, 168, 83)) { StrokeThickness = 2 },
                     Fill = null,
                     GeometrySize = 0
@@ -2467,7 +2561,7 @@ public partial class StatisticsViewModel : ObservableObject
                 new LineSeries<double>
                 {
                     Values = rolling30,
-                    Name = "30-Day Avg",
+                    Name = "30-Shift Avg",
                     Stroke = new SolidColorPaint(new SKColor(251, 188, 4)) { StrokeThickness = 2 },
                     Fill = null,
                     GeometrySize = 0
@@ -2491,7 +2585,7 @@ public partial class StatisticsViewModel : ObservableObject
                 {
                     LabelsPaint = new SolidColorPaint(SKColors.White),
                     TextSize = 11,
-                    Labeler = value => $"{value:F0}",
+                    Labeler = value => isRvuPerHour ? $"{value:F1}" : $"{value:F0}",
                     MinLimit = 0
                 }
             };
