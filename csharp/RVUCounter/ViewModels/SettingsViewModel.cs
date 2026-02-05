@@ -774,7 +774,7 @@ public partial class SettingsViewModel : ObservableObject
                     });
 
                     var success = await updateManager.DownloadAndApplyUpdateAsync(
-                        updateInfo.DownloadUrl, progress);
+                        updateInfo.DownloadUrl, progress, updateInfo.AssetSize);
 
                     if (success)
                     {

@@ -95,7 +95,7 @@ public class UserSettings
     public bool DropboxBackupEnabled { get; set; } = false;
     public string? DropboxAppKey { get; set; }
     public string? DropboxRefreshToken { get; set; }
-    public int BackupRetentionCount { get; set; } = 30;
+    public int BackupRetentionCount { get; set; } = 10;
 
     // Mini interface settings
     public string MiniMetric1 { get; set; } = "pace";

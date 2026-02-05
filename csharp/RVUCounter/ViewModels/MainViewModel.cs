@@ -1085,8 +1085,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            // Step 1: Clean up old version file
-            var justUpdated = UpdateManager.CleanupOldVersion();
+            // Step 1: Check if we just updated (old version file exists)
+            var justUpdated = UpdateManager.JustUpdated();
             var currentVersion = UpdateManager.GetCurrentVersion();
 
             // Step 2: Check if version changed (either from update or first run after new install)
@@ -1114,6 +1114,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Log.Warning(ex, "Could not show What's New window");
                     }
                 });
+
+                // Now that we've confirmed the new version works, clean up the old one
+                if (justUpdated)
+                {
+                    UpdateManager.CleanupOldVersion();
+                }
             }
             else if (lastSeenVersion == null)
             {
@@ -1125,6 +1131,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Step 3: Auto-update check if enabled
             if (_dataManager.Settings.AutoUpdateEnabled)
             {
+                // Circuit breaker: skip if we just restarted for an update (prevents loops)
+                if (!UpdateManager.IsAutoUpdateSafe())
+                {
+                    Log.Warning("Skipping auto-update this launch (circuit breaker)");
+                    // Still clean up old version if present since we got this far
+                    if (justUpdated) UpdateManager.CleanupOldVersion();
+                    return;
+                }
+
                 Log.Information("Auto-update enabled, checking for updates...");
                 var updateManager = new UpdateManager();
                 var updateInfo = await updateManager.CheckForUpdateAsync();
@@ -1142,11 +1157,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     StatusMessage = $"Updating to v{updateInfo.Version}...";
 
                     var success = await updateManager.DownloadAndApplyUpdateAsync(
-                        updateInfo.DownloadUrl);
+                        updateInfo.DownloadUrl,
+                        expectedSize: updateInfo.AssetSize);
 
                     if (success)
                     {
-                        Log.Information("Update applied successfully, restarting");
+                        Log.Information("Update applied successfully, preparing to restart");
+
+                        // Flush data before exit to prevent corruption
+                        try
+                        {
+                            _dataManager.SaveSettings();
+                            _dataManager.Database.Checkpoint();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(ex, "Error flushing data before update restart");
+                        }
+
+                        // Write circuit breaker marker before restarting
+                        UpdateManager.WriteRestartMarker();
                         UpdateManager.RestartApp();
                     }
                     else

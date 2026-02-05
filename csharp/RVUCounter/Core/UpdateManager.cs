@@ -67,11 +67,21 @@ public class UpdateManager
     }
 
     /// <summary>
-    /// Clean up old version file from previous update.
-    /// Call this on startup.
+    /// Check if we just updated (old version file exists).
+    /// Does NOT delete the old version immediately - keeps it as a rollback until
+    /// the app has fully started successfully.
     /// </summary>
-    /// <returns>True if an old version was cleaned up (indicating we just updated)</returns>
-    public static bool CleanupOldVersion()
+    /// <returns>True if an old version exists (indicating we just updated)</returns>
+    public static bool JustUpdated()
+    {
+        return File.Exists(GetOldExePath());
+    }
+
+    /// <summary>
+    /// Clean up old version file after confirming the new version is stable.
+    /// Call this after the app has fully started and is working.
+    /// </summary>
+    public static void CleanupOldVersion()
     {
         var oldExePath = GetOldExePath();
 
@@ -79,18 +89,16 @@ public class UpdateManager
         {
             if (File.Exists(oldExePath))
             {
-                // Try to delete the old exe - may need a few attempts as Windows releases locks
                 for (int i = 0; i < 5; i++)
                 {
                     try
                     {
                         File.Delete(oldExePath);
                         Log.Information("Cleaned up old version: {Path}", oldExePath);
-                        return true;
+                        return;
                     }
                     catch (IOException)
                     {
-                        // File may still be locked, wait and retry
                         Thread.Sleep(500);
                     }
                 }
@@ -102,8 +110,65 @@ public class UpdateManager
         {
             Log.Warning(ex, "Error cleaning up old version: {Path}", oldExePath);
         }
+    }
 
-        return false;
+    /// <summary>
+    /// Write a marker file before restarting for an update.
+    /// Used as a circuit breaker to prevent restart loops.
+    /// </summary>
+    public static void WriteRestartMarker()
+    {
+        try
+        {
+            var markerPath = GetRestartMarkerPath();
+            File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Could not write restart marker");
+        }
+    }
+
+    /// <summary>
+    /// Check if a recent update restart happened (circuit breaker).
+    /// Returns true if it's safe to auto-update, false if we should skip.
+    /// </summary>
+    public static bool IsAutoUpdateSafe()
+    {
+        try
+        {
+            var markerPath = GetRestartMarkerPath();
+            if (!File.Exists(markerPath))
+                return true;
+
+            var content = File.ReadAllText(markerPath).Trim();
+            File.Delete(markerPath);
+
+            if (DateTime.TryParse(content, null, System.Globalization.DateTimeStyles.RoundtripKind, out var lastRestart))
+            {
+                var elapsed = DateTime.UtcNow - lastRestart;
+                if (elapsed.TotalMinutes < 3)
+                {
+                    Log.Warning("Auto-update circuit breaker: app restarted for update {Elapsed:F0}s ago, skipping auto-update this launch",
+                        elapsed.TotalSeconds);
+                    return false;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Error checking restart marker");
+            // If we can't check, err on the side of caution
+            try { File.Delete(GetRestartMarkerPath()); } catch { }
+        }
+
+        return true;
+    }
+
+    private static string GetRestartMarkerPath()
+    {
+        var dir = Path.GetDirectoryName(GetCurrentExePath()) ?? AppContext.BaseDirectory;
+        return Path.Combine(dir, ".update_restart");
     }
 
     /// <summary>
@@ -233,7 +298,8 @@ public class UpdateManager
     /// <returns>True if update was successfully applied and app should restart</returns>
     public async Task<bool> DownloadAndApplyUpdateAsync(
         string downloadUrl,
-        IProgress<double>? progress = null)
+        IProgress<double>? progress = null,
+        long expectedSize = 0)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"RVUCounter_Update_{Guid.NewGuid():N}");
 
@@ -279,6 +345,21 @@ public class UpdateManager
             }
 
             Log.Information("Download complete: {Path} ({Size} bytes)", tempFile, downloadedBytes);
+
+            // Verify download size matches what GitHub reported
+            if (expectedSize > 0 && downloadedBytes != expectedSize)
+            {
+                Log.Error("Download size mismatch: got {Actual} bytes, expected {Expected} bytes",
+                    downloadedBytes, expectedSize);
+                return false;
+            }
+
+            // Verify download isn't suspiciously small (corrupt/truncated)
+            if (downloadedBytes < 1024 * 100) // less than 100KB is suspicious for an exe/zip
+            {
+                Log.Error("Downloaded file is suspiciously small: {Size} bytes", downloadedBytes);
+                return false;
+            }
 
             // Extract if ZIP, otherwise use the downloaded file directly
             string newExePath;
@@ -351,13 +432,14 @@ public class UpdateManager
     /// </summary>
     private bool ApplyUpdate(string newExePath, string? extractedDir = null)
     {
+        var currentExe = GetCurrentExePath();
+        var oldExe = GetOldExePath();
+        var currentDir = Path.GetDirectoryName(currentExe) ?? AppContext.BaseDirectory;
+        var tempNewExe = Path.Combine(currentDir, "RVUCounter_new.exe");
+        var step3Done = false;
+
         try
         {
-            var currentExe = GetCurrentExePath();
-            var oldExe = GetOldExePath();
-            var currentDir = Path.GetDirectoryName(currentExe) ?? AppContext.BaseDirectory;
-            var tempNewExe = Path.Combine(currentDir, "RVUCounter_new.exe");
-
             Log.Information("Applying update: {New} -> {Current} (appDir: {Dir})", newExePath, currentExe, currentDir);
 
             // Step 1: Copy new exe to app directory with temp name
@@ -375,13 +457,12 @@ public class UpdateManager
                 catch (Exception ex)
                 {
                     Log.Warning(ex, "Step 2: Could not delete existing old version file, trying overwrite");
-                    // If we can't delete it, File.Move with overwrite won't work on older .NET
-                    // but we can still try - worst case step 3 fails and we catch it
                 }
             }
 
             // Step 3: Rename current exe to _old (Windows allows this even when running!)
             File.Move(currentExe, oldExe, overwrite: true);
+            step3Done = true;
             Log.Information("Step 3: Renamed current exe to: {Path}", oldExe);
 
             // Step 4: Rename new exe to current
@@ -400,6 +481,26 @@ public class UpdateManager
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to apply update");
+
+            // CRITICAL: If step 3 succeeded but step 4 failed, there's no RVUCounter.exe!
+            // Roll back by renaming _old back to the original name.
+            if (step3Done && !File.Exists(currentExe) && File.Exists(oldExe))
+            {
+                try
+                {
+                    File.Move(oldExe, currentExe);
+                    Log.Information("Rolled back: restored original exe from _old");
+                }
+                catch (Exception rollbackEx)
+                {
+                    Log.Error(rollbackEx, "CRITICAL: Rollback failed! RVUCounter.exe is missing. " +
+                        "Manually rename RVUCounter_old.exe to RVUCounter.exe to recover.");
+                }
+            }
+
+            // Clean up temp new exe if it's still around
+            try { if (File.Exists(tempNewExe)) File.Delete(tempNewExe); } catch { }
+
             return false;
         }
     }

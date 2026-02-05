@@ -315,7 +315,33 @@ public class BackupManager
 
             if (response.IsSuccessStatusCode)
             {
-                Log.Information("Dropbox backup created: {Path}", remotePath);
+                // Verify the upload response - detect if Dropbox renamed or truncated the file
+                var responseJson = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    using var responseDoc = JsonDocument.Parse(responseJson);
+                    var uploadedName = responseDoc.RootElement.GetProperty("name").GetString() ?? "";
+                    var uploadedSize = responseDoc.RootElement.TryGetProperty("size", out var sizeEl) ? sizeEl.GetInt64() : -1;
+
+                    Log.Information("Dropbox backup uploaded: {Name} ({Size} bytes, local was {Local} bytes)",
+                        uploadedName, uploadedSize, fileBytes.Length);
+
+                    if (uploadedName != Path.GetFileName(remotePath))
+                    {
+                        Log.Warning("Dropbox renamed backup file: expected '{Expected}', got '{Actual}'",
+                            Path.GetFileName(remotePath), uploadedName);
+                    }
+
+                    if (uploadedSize >= 0 && uploadedSize != fileBytes.Length)
+                    {
+                        Log.Warning("Dropbox file size mismatch: uploaded {Local} bytes, server reports {Remote} bytes",
+                            fileBytes.Length, uploadedSize);
+                    }
+                }
+                catch (Exception parseEx)
+                {
+                    Log.Debug(parseEx, "Could not parse Dropbox upload response for verification");
+                }
 
                 // Clean up old Dropbox backups
                 await CleanupOldDropboxBackupsAsync(accessToken, settings.BackupRetentionCount);
@@ -398,7 +424,9 @@ public class BackupManager
             using var httpClient = new HttpClient();
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
-            // List files in /Backups folder
+            var backupFiles = new List<(string Path, string Name, long Size)>();
+
+            // List files in /Backups folder (with pagination)
             var listContent = new StringContent(
                 JsonSerializer.Serialize(new { path = "/Backups" }),
                 Encoding.UTF8,
@@ -415,29 +443,70 @@ public class BackupManager
                 return;
             }
 
-            var listJson = await listResponse.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(listJson);
-            var entries = doc.RootElement.GetProperty("entries");
-
-            // Filter for RVU_Backup files and sort by name (contains timestamp)
-            var backupFiles = new List<(string Path, string Name)>();
-            foreach (var entry in entries.EnumerateArray())
+            void CollectBackupEntries(JsonElement entries)
             {
-                var name = entry.GetProperty("name").GetString() ?? "";
-                if (name.StartsWith("RVU_Backup_") && name.EndsWith(".db"))
+                foreach (var entry in entries.EnumerateArray())
                 {
-                    var pathLower = entry.GetProperty("path_lower").GetString() ?? "";
-                    backupFiles.Add((pathLower, name));
+                    var name = entry.GetProperty("name").GetString() ?? "";
+                    if (name.StartsWith("RVU_Backup_") && name.EndsWith(".db"))
+                    {
+                        var pathLower = entry.GetProperty("path_lower").GetString() ?? "";
+                        long size = entry.TryGetProperty("size", out var sizeEl) ? sizeEl.GetInt64() : 0;
+                        backupFiles.Add((pathLower, name, size));
+                    }
+                }
+            }
+
+            var listJson = await listResponse.Content.ReadAsStringAsync();
+            using (var doc = JsonDocument.Parse(listJson))
+            {
+                CollectBackupEntries(doc.RootElement.GetProperty("entries"));
+
+                // Handle pagination - Dropbox may not return all files in one call
+                var hasMore = doc.RootElement.GetProperty("has_more").GetBoolean();
+                var cursor = doc.RootElement.GetProperty("cursor").GetString();
+
+                while (hasMore && !string.IsNullOrEmpty(cursor))
+                {
+                    var continueContent = new StringContent(
+                        JsonSerializer.Serialize(new { cursor }),
+                        Encoding.UTF8,
+                        "application/json");
+
+                    var continueResponse = await httpClient.PostAsync(
+                        "https://api.dropboxapi.com/2/files/list_folder/continue",
+                        continueContent);
+
+                    if (!continueResponse.IsSuccessStatusCode) break;
+
+                    var continueJson = await continueResponse.Content.ReadAsStringAsync();
+                    using var continueDoc = JsonDocument.Parse(continueJson);
+                    CollectBackupEntries(continueDoc.RootElement.GetProperty("entries"));
+
+                    hasMore = continueDoc.RootElement.GetProperty("has_more").GetBoolean();
+                    cursor = continueDoc.RootElement.GetProperty("cursor").GetString();
                 }
             }
 
             // Sort by name descending (newest first since name contains timestamp)
             backupFiles = backupFiles.OrderByDescending(f => f.Name).ToList();
 
+            Log.Debug("Dropbox cleanup: found {Count} backups, retention is {Retention}",
+                backupFiles.Count, retentionCount);
+
+            // Log any suspiciously small files (potential corruption/sync issues)
+            foreach (var (path, name, size) in backupFiles)
+            {
+                if (size > 0 && size < 10240) // less than 10KB is suspicious for a DB backup
+                {
+                    Log.Warning("Dropbox backup is suspiciously small: {Name} ({Size} bytes)", name, size);
+                }
+            }
+
             // Delete files beyond retention limit
             if (backupFiles.Count > retentionCount)
             {
-                foreach (var (path, name) in backupFiles.Skip(retentionCount))
+                foreach (var (path, name, _) in backupFiles.Skip(retentionCount))
                 {
                     try
                     {
@@ -452,11 +521,12 @@ public class BackupManager
 
                         if (deleteResponse.IsSuccessStatusCode)
                         {
-                            Log.Debug("Deleted old Dropbox backup: {Path}", path);
+                            Log.Information("Deleted old Dropbox backup: {Name}", name);
                         }
                         else
                         {
-                            Log.Warning("Failed to delete old Dropbox backup: {Path}", path);
+                            var error = await deleteResponse.Content.ReadAsStringAsync();
+                            Log.Warning("Failed to delete old Dropbox backup {Name}: {Error}", name, error);
                         }
                     }
                     catch (Exception ex)
@@ -668,9 +738,18 @@ public class BackupManager
         {
             try
             {
+                // Clear any pooled SQLite connections that might be holding backup files open
+                // (integrity checks open connections to these files)
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+                // Sort by filename (contains timestamp) instead of File.GetCreationTime
+                // which can be unreliable in OneDrive-synced folders
                 var backupFiles = Directory.GetFiles(backupFolder, "RVU_Backup_*.db")
-                    .OrderByDescending(f => File.GetCreationTime(f))
+                    .OrderByDescending(f => Path.GetFileName(f))
                     .ToList();
+
+                Log.Debug("OneDrive cleanup: found {Count} backups, retention is {Retention}",
+                    backupFiles.Count, retentionCount);
 
                 if (backupFiles.Count > retentionCount)
                 {
@@ -679,11 +758,12 @@ public class BackupManager
                         try
                         {
                             File.Delete(file);
-                            Log.Debug("Deleted old backup: {File}", file);
+                            Log.Information("Deleted old OneDrive backup: {File}", Path.GetFileName(file));
                         }
                         catch (Exception ex)
                         {
-                            Log.Warning(ex, "Failed to delete old backup: {File}", file);
+                            Log.Warning(ex, "Failed to delete old backup (may be locked by OneDrive sync): {File}",
+                                Path.GetFileName(file));
                         }
                     }
                 }
@@ -709,7 +789,7 @@ public class BackupManager
         try
         {
             var files = Directory.GetFiles(backupFolder, "RVU_Backup_*.db")
-                .OrderByDescending(f => File.GetCreationTime(f));
+                .OrderByDescending(f => Path.GetFileName(f));
 
             foreach (var file in files)
             {

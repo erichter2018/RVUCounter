@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>3.1.4</Version>
-    <AssemblyVersion>3.1.4.0</AssemblyVersion>
-    <FileVersion>3.1.4.0</FileVersion>
+    <Version>3.1.5</Version>
+    <AssemblyVersion>3.1.5.0</AssemblyVersion>
+    <FileVersion>3.1.5.0</FileVersion>
     <AssemblyTitle>RVU Counter</AssemblyTitle>
     <Product>RVU Counter</Product>
     <Company>Erik Richter</Company>
