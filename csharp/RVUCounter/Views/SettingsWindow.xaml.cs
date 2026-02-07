@@ -97,6 +97,29 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void DropboxHelp_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show(
+            "1. Go to dropbox.com/developers/apps and click \"Create app\"\n" +
+            "2. Choose \"Scoped access\" and \"App folder\"\n" +
+            "3. Name it anything (e.g. \"RVU Backup\") and click Create\n" +
+            "4. Go to the Permissions tab and enable:\n" +
+            "     - files.metadata.read\n" +
+            "     - files.content.read\n" +
+            "     - files.content.write\n" +
+            "5. Click Submit on the Permissions page\n" +
+            "6. Go to the Settings tab and copy your App Key\n" +
+            "7. Paste the App Key into the field below and click \"Authorize Dropbox\"\n" +
+            "8. Sign in to Dropbox in the browser and click Allow\n" +
+            "9. Paste the authorization code back into the app\n\n" +
+            "Important: Each user must create their own Dropbox app\n" +
+            "and authorize their own account. Never share your App Key\n" +
+            "or settings folder with other users.",
+            "Dropbox Backup Setup",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
     private async void AuthorizeDropbox_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -122,7 +145,8 @@ public partial class SettingsWindow : Window
 
                 if (success && refreshToken != null)
                 {
-                    // Save the refresh token
+                    // Save the app key and refresh token together
+                    _dataManager.Settings.DropboxAppKey = appKey;
                     _dataManager.Settings.DropboxRefreshToken = refreshToken;
                     _dataManager.Settings.DropboxBackupEnabled = true;
                     _dataManager.SaveSettings();

@@ -344,7 +344,7 @@ public class BackupManager
                 }
 
                 // Clean up old Dropbox backups
-                await CleanupOldDropboxBackupsAsync(accessToken, settings.BackupRetentionCount);
+                await CleanupOldDropboxBackupsAsync(accessToken, 10);
 
                 return (true, $"Backup uploaded to Dropbox: {remotePath}");
             }
@@ -732,7 +732,7 @@ public class BackupManager
     private async Task CleanupOldBackupsAsync(string backupFolder)
     {
         var settings = _getSettings();
-        var retentionCount = settings.BackupRetentionCount > 0 ? settings.BackupRetentionCount : 10;
+        var retentionCount = 10;
 
         await Task.Run(() =>
         {

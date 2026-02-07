@@ -529,6 +529,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, (DateTime Time, bool HasCritical)> _preEmptiveSigned = new();
     private readonly object _preEmptiveUnsignedLock = new();
     private readonly object _preEmptiveSignedLock = new();
+    private CancellationTokenSource? _statusRevertCts;
 
     // Inactivity auto-end feature (Python parity)
     private const int InactivityThresholdSeconds = 3600;  // 1 hour of no studies = auto-end shift
@@ -3225,13 +3226,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // Always show message for debugging/testing, even if integration disabled
         var criticalIndicator = hasCritical ? " ⚠️" : "";
-        StatusMessage = $"✅ Signed{criticalIndicator}";
+        SetTransientStatus($"✅ Signed{criticalIndicator}");
         Log.Information("MosaicTools received SIGNED{Critical} message for: {Accession}",
             hasCritical ? " (CRITICAL)" : "", accession);
 
         if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
         {
-            StatusMessage = $"✅ Signed (off){criticalIndicator}";
+            SetTransientStatus($"✅ Signed (off){criticalIndicator}");
             return;
         }
 
@@ -3246,12 +3247,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     pending.Record.HasCriticalResult = true;
                     Log.Information("MosaicTools confirmed SIGNED with CRITICAL RESULT - adding to database: {Accession}", accession);
-                    StatusMessage = $"✅ +{pending.Record.StudyType} ⚠️";
+                    SetTransientStatus($"✅ +{pending.Record.StudyType} ⚠️");
                 }
                 else
                 {
                     Log.Information("MosaicTools confirmed SIGNED - adding to database: {Accession}", accession);
-                    StatusMessage = $"✅ +{pending.Record.StudyType}";
+                    SetTransientStatus($"✅ +{pending.Record.StudyType}");
                 }
 
                 // Add to database
@@ -3273,7 +3274,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _preEmptiveSigned[accession] = (DateTime.Now, hasCritical);
                     }
                     Log.Information("MosaicTools SIGNED for actively-tracked study (still visible) - stored for later: {Accession}", accession);
-                    StatusMessage = $"✅ Signed (tracking){criticalIndicator}";
+                    SetTransientStatus($"✅ Signed (tracking){criticalIndicator}");
                     // No timer needed — the study will be processed when it leaves the tracker
                     return;
                 }
@@ -3286,7 +3287,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _preEmptiveSigned[accession] = (DateTime.Now, hasCritical);
                     Log.Information("MosaicTools PRE-EMPTIVE SIGNED{Critical} - will count immediately when detected: {Accession}",
                         hasCritical ? " (CRITICAL)" : "", accession);
-                    StatusMessage = $"✅ Pre-signed{criticalIndicator}";
+                    SetTransientStatus($"✅ Pre-signed{criticalIndicator}");
                 }
 
                 // Start timer to clean up old pre-emptive entries
@@ -3303,13 +3304,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // Always show message for debugging/testing, even if integration disabled
         // Note: Critical flag is accepted for API consistency but doesn't affect unsigned studies
-        StatusMessage = "❌ Unsigned";
+        SetTransientStatus("❌ Unsigned");
         Log.Information("MosaicTools received UNSIGNED{Critical} message for: {Accession}",
             hasCritical ? " (CRITICAL)" : "", accession);
 
         if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
         {
-            StatusMessage = "❌ Unsigned (off)";
+            SetTransientStatus("❌ Unsigned (off)");
             return;
         }
 
@@ -3322,7 +3323,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foundInPending = true;
                 Log.Information("MosaicTools confirmed UNSIGNED - discarding study: {Accession} ({StudyType}, {Rvu} RVU)",
                     accession, pending.Record.StudyType, pending.Record.Rvu);
-                StatusMessage = $"❌ -{pending.Record.StudyType}";
+                SetTransientStatus($"❌ -{pending.Record.StudyType}");
             }
         }
 
@@ -3337,7 +3338,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _temporaryStudies.Remove(tempStudy);
                 Log.Information("MosaicTools UNSIGNED - removed from temporary studies: {Accession} ({StudyType}, {Rvu} RVU)",
                     accession, tempStudy.StudyType, tempStudy.Rvu);
-                StatusMessage = "❌ Temp removed";
+                SetTransientStatus("❌ Temp removed");
                 UpdateRecentStudiesDisplay();
             }
             else if (_studyTracker.IsTracking(accession))
@@ -3349,7 +3350,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _preEmptiveUnsigned[accession] = DateTime.Now;
                 }
                 Log.Information("MosaicTools UNSIGNED for actively-tracked study (still visible) - stored for later: {Accession}", accession);
-                StatusMessage = "❌ Unsigned (tracking)";
+                SetTransientStatus("❌ Unsigned (tracking)");
                 // No timer needed — will be checked when the study leaves the tracker
             }
             else
@@ -3361,7 +3362,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     _preEmptiveUnsigned[accession] = DateTime.Now;
                     Log.Information("MosaicTools PRE-EMPTIVE UNSIGNED - will discard when detected: {Accession}", accession);
-                    StatusMessage = "❌ Pre-unsigned";
+                    SetTransientStatus("❌ Pre-unsigned");
                 }
 
                 // Start timer to clean up old pre-emptive entries
@@ -3386,7 +3387,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _preEmptiveUnsigned.Remove(rawAccession);
                 Log.Information("Discarding study due to pre-emptive UNSIGNED (received {Ago:F1}s ago): {Accession} ({StudyType}, {Rvu} RVU)",
                     (DateTime.Now - unsignedTime).TotalSeconds, rawAccession, record.StudyType, record.Rvu);
-                StatusMessage = "❌ Pre-skip";
+                SetTransientStatus("❌ Skipped (unsigned)");
                 return; // Don't add to pending - it was already marked unsigned
             }
         }
@@ -3406,7 +3407,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var criticalMsg = hasCritical ? " (CRITICAL)" : "";
                 Log.Information("Adding study immediately due to pre-emptive SIGNED{Critical} (received {Ago:F1}s ago): {Accession} ({StudyType}, {Rvu} RVU)",
                     criticalMsg, (DateTime.Now - signedTime).TotalSeconds, rawAccession, record.StudyType, record.Rvu);
-                StatusMessage = hasCritical ? "✅ Pre-add ⚠️" : "✅ Pre-add";
+                SetTransientStatus(hasCritical ? "✅ Pre-add ⚠️" : "✅ Pre-add");
 
                 // Add directly - create a PendingStudy just for the AddPendingStudyToDatabase call
                 var pending = new PendingStudy
@@ -3432,7 +3433,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             };
             _pendingStudies[rawAccession] = pending;
             Log.Information("Added study to pending queue, waiting for MosaicTools: {Accession}", rawAccession);
-            StatusMessage = "⏳ Pending";
+            SetTransientStatus("⏳ Pending");
 
             // Start/restart the timer to check for timeouts
             EnsurePendingStudiesTimerRunning();
@@ -3530,7 +3531,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var pending in timedOut)
         {
             Log.Information("MosaicTools timeout - adding study to database (default): {Accession}", pending.RawAccession);
-            StatusMessage = "⏱️ Timeout: added";
+            SetTransientStatus("⏱️ Timeout: added");
             AddPendingStudyToDatabase(pending);
         }
     }
@@ -3604,6 +3605,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Utils.WindowExtraction.Cleanup();
         _dataManager.Dispose();
         LoggingConfig.Shutdown();
+    }
+
+    /// <summary>
+    /// Set a transient status message that reverts to "MT: Listening" after a delay.
+    /// </summary>
+    private void SetTransientStatus(string message, int delayMs = 3000)
+    {
+        StatusMessage = message;
+
+        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+            return;
+
+        _statusRevertCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _statusRevertCts = cts;
+
+        Task.Delay(delayMs, cts.Token).ContinueWith(_ =>
+        {
+            Application.Current?.Dispatcher?.Invoke(() => StatusMessage = "🔗 MT: Listening");
+        }, TaskContinuationOptions.OnlyOnRanToCompletion);
     }
 }
 
