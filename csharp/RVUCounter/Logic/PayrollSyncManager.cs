@@ -76,7 +76,7 @@ public class PayrollSyncManager
                 return result;
             }
 
-            // Read Excel data
+            // Read Excel data (hash accessions to match HIPAA-hashed DB records)
             var excelData = new Dictionary<string, DateTime>();
             var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
 
@@ -94,7 +94,7 @@ public class PayrollSyncManager
                         dt = parsed;
 
                     if (dt.HasValue)
-                        excelData[acc] = dt.Value;
+                        excelData[_dataManager.HashAccession(acc)] = dt.Value;
                 }
             }
 

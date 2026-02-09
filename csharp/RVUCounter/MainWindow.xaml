@@ -353,7 +353,7 @@
                             <!-- Title -->
                             <TextBlock Grid.Column="1" FontSize="{DynamicResource FontSizeSmall}" VerticalAlignment="Center">
                                 <Run Text="Team" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/>
-                                <Run Text="{Binding TeamStatusMessage}" Foreground="{DynamicResource SecondaryTextBrush}"/>
+                                <Run Text="{Binding TeamStatusMessage, Mode=OneWay}" Foreground="{DynamicResource SecondaryTextBrush}"/>
                             </TextBlock>
                             <!-- Mode toggle (clickable) -->
                             <Border Grid.Column="2" Background="{DynamicResource CardBackgroundBrush}"
@@ -653,11 +653,11 @@
                                        FontSize="{DynamicResource FontSizeSmall}" Foreground="#CCCCCC"/>
                         </Grid>
                         <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}">
-                            <Run Text="Patient Class: "/><Run Text="{Binding CurrentPatientClass}"/>
+                            <Run Text="Patient Class: "/><Run Text="{Binding CurrentPatientClass, Mode=OneWay}"/>
                         </TextBlock>
                         <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}"
                                    TextTrimming="CharacterEllipsis">
-                            <Run Text="Procedure: "/><Run Text="{Binding CurrentProcedure}"/>
+                            <Run Text="Procedure: "/><Run Text="{Binding CurrentProcedure, Mode=OneWay}"/>
                         </TextBlock>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -666,7 +666,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}" Foreground="{DynamicResource SecondaryTextBrush}"
                                        TextTrimming="CharacterEllipsis">
-                                <Run Text="Study Type: "/><Run Text="{Binding CurrentStudyType}"/>
+                                <Run Text="Study Type: "/><Run Text="{Binding CurrentStudyType, Mode=OneWay}"/>
                             </TextBlock>
                             <TextBlock Grid.Column="1" FontFamily="Consolas" FontSize="{DynamicResource FontSizeSmall}"
                                        Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"

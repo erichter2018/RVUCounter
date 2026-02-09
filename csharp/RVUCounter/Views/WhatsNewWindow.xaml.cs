@@ -22,12 +22,12 @@ public partial class WhatsNewWindow : Window
         // Apply dark title bar based on current theme
         ThemeManager.ApplyCurrentThemeTitleBar(this);
 
-        DataContext = this;
-
         version ??= Config.AppVersion.Split(' ')[0];
         var titleText = $"What's New in RVU Counter {version}";
         HeaderTitle = titleText;
         Title = titleText; // Sets Window.Title for the title bar
+
+        DataContext = this;
 
         LoadContent(version);
     }

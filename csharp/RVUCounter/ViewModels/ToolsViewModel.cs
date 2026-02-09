@@ -136,8 +136,10 @@ public partial class ToolsViewModel : ObservableObject
         StatusText = "Scanning database...";
         ReportText = "";
 
-        await Task.Run(() =>
+        var result = await Task.Run(() =>
         {
+            string reportText = "";
+            string statusText = "";
             try
             {
                 var sb = new System.Text.StringBuilder();
@@ -219,17 +221,21 @@ public partial class ToolsViewModel : ObservableObject
                 sb.AppendLine($"  Studies: {allRecords.Count}");
                 sb.AppendLine($"  Total RVU: {allRecords.Sum(r => r.Rvu):F1}");
 
-                ReportText = sb.ToString();
-                StatusText = totalIssues > 0 ? $"Found {totalIssues} issues" : "No issues found";
+                reportText = sb.ToString();
+                statusText = totalIssues > 0 ? $"Found {totalIssues} issues" : "No issues found";
             }
             catch (Exception ex)
             {
-                ReportText = $"Error: {ex.Message}";
-                StatusText = "Scan failed";
+                reportText = $"Error: {ex.Message}";
+                statusText = "Scan failed";
                 Log.Error(ex, "Database scan failed");
             }
+
+            return (reportText, statusText);
         });
 
+        ReportText = result.reportText;
+        StatusText = result.statusText;
         IsProcessing = false;
     }
 
@@ -238,13 +244,16 @@ public partial class ToolsViewModel : ObservableObject
     {
         IsProcessing = true;
         StatusText = "Fixing database...";
-        var report = new System.Text.StringBuilder();
-        report.AppendLine("=== DATABASE FIX REPORT ===");
-        report.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        report.AppendLine();
 
-        await Task.Run(() =>
+        var result = await Task.Run(() =>
         {
+            var report = new System.Text.StringBuilder();
+            report.AppendLine("=== DATABASE FIX REPORT ===");
+            report.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            report.AppendLine();
+            string reportText = "";
+            string statusText = "";
+            bool shouldReloadStats = false;
             try
             {
                 var allRecords = _dataManager.Database.GetAllRecords();
@@ -382,19 +391,27 @@ public partial class ToolsViewModel : ObservableObject
                     report.AppendLine($"TOTAL: {totalFixed} issues fixed");
                 }
 
-                ReportText = report.ToString();
-                LoadDatabaseStats();
-                _onDatabaseChanged?.Invoke();
-                StatusText = totalFixed > 0 ? $"Fixed {totalFixed} issues" : "No issues to fix";
+                reportText = report.ToString();
+                shouldReloadStats = true;
+                statusText = totalFixed > 0 ? $"Fixed {totalFixed} issues" : "No issues to fix";
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "Fix database failed");
-                ReportText = $"Error fixing database: {ex.Message}";
-                StatusText = "Fix failed";
+                reportText = $"Error fixing database: {ex.Message}";
+                statusText = "Fix failed";
             }
+
+            return (reportText, statusText, shouldReloadStats);
         });
 
+        ReportText = result.reportText;
+        StatusText = result.statusText;
+        if (result.shouldReloadStats)
+        {
+            LoadDatabaseStats();
+            _onDatabaseChanged?.Invoke();
+        }
         IsProcessing = false;
     }
 

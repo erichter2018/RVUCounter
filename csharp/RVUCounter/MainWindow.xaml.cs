@@ -173,7 +173,7 @@ public partial class MainWindow : Window
     {
         if (e.ChangedButton == MouseButton.Left)
         {
-            DragMove();
+            try { DragMove(); } catch (InvalidOperationException) { }
         }
     }
 

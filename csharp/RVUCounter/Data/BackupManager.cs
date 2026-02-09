@@ -16,6 +16,8 @@ namespace RVUCounter.Data;
 /// </summary>
 public class BackupManager
 {
+    private static readonly HttpClient _httpClient = new();
+
     private readonly string _databasePath;
     private readonly Func<Models.UserSettings> _getSettings;
     private readonly Action<Models.UserSettings>? _saveSettings;
@@ -299,7 +301,7 @@ public class BackupManager
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm");
             var remotePath = $"/Backups/RVU_Backup_{timestamp}#.db";
 
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
             httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
                 JsonSerializer.Serialize(new { path = remotePath, mode = "overwrite" }));
@@ -380,7 +382,7 @@ public class BackupManager
 
         try
         {
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             // PKCE refresh tokens don't require client_secret
             var requestContent = new FormUrlEncodedContent(new Dictionary<string, string>
             {
@@ -421,7 +423,7 @@ public class BackupManager
 
         try
         {
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var backupFiles = new List<(string Path, string Name, long Size)>();
@@ -622,7 +624,7 @@ public class BackupManager
 
         try
         {
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             var requestContent = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 { "grant_type", "authorization_code" },
@@ -910,7 +912,7 @@ public class BackupManager
                 return false;
             }
 
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var deleteContent = new StringContent(
@@ -965,7 +967,7 @@ public class BackupManager
                 return backups;
             }
 
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var listContent = new StringContent(
@@ -1054,7 +1056,7 @@ public class BackupManager
             }
 
             // Download file from Dropbox
-            using var httpClient = new HttpClient();
+            var httpClient = _httpClient;
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
             httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
                 JsonSerializer.Serialize(new { path = remotePath }));

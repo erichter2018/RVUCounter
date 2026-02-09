@@ -723,6 +723,9 @@ public partial class StatisticsViewModel : ObservableObject
         SecondChartTitle = "Avg Time to Read";
         ShowChartToggle = true;  // Show toggle by default (comparison view will hide it)
         IsAllStudiesView = false;  // Reset - only DisplayAllStudies sets this to true
+        IsTrendsView = false;
+        IsHeatmapView = false;
+        IsInsightsView = false;
 
         // Display based on view mode
         switch (ViewMode)
