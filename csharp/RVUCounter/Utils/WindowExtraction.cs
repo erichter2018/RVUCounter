@@ -15,6 +15,8 @@ public static class WindowExtraction
     private static UIA3Automation? _automation;
     private static readonly object _lock = new();
     private static int _consecutiveComFailures;
+    private static readonly System.Text.RegularExpressions.Regex DatePatternRegex =
+        new(@"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// Get or create the UIA3 automation instance.
@@ -134,9 +136,10 @@ public static class WindowExtraction
     /// </summary>
     public static AutomationElement? FindWindowByProcessName(string processName)
     {
+        System.Diagnostics.Process[]? processes = null;
         try
         {
-            var processes = System.Diagnostics.Process.GetProcessesByName(processName);
+            processes = System.Diagnostics.Process.GetProcessesByName(processName);
             if (processes.Length == 0)
             {
                 return null;
@@ -183,6 +186,14 @@ public static class WindowExtraction
             RecordUiaFailure();
             return null;
         }
+        finally
+        {
+            if (processes != null)
+            {
+                foreach (var p in processes)
+                    p.Dispose();
+            }
+        }
     }
 
     /// <summary>
@@ -194,7 +205,7 @@ public static class WindowExtraction
         int timeoutMs = 10000)
     {
         var result = new List<AutomationElement>();
-        var cts = new CancellationTokenSource(timeoutMs);
+        using var cts = new CancellationTokenSource(timeoutMs);
 
         try
         {
@@ -330,7 +341,7 @@ public static class WindowExtraction
         }
 
         // Check for date patterns (MM/DD/YYYY or similar)
-        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"))
+        if (DatePatternRegex.IsMatch(text))
             return false;
 
         // Accession should contain some digits

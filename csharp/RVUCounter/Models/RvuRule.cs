@@ -1,27 +1,6 @@
 namespace RVUCounter.Models;
 
 /// <summary>
-/// Represents an RVU classification rule from rvu_rules.yaml
-/// </summary>
-public class RvuRule
-{
-    /// <summary>
-    /// The study type name (e.g., "CT CAP", "MRI Brain")
-    /// </summary>
-    public string StudyType { get; set; } = string.Empty;
-
-    /// <summary>
-    /// RVU value assigned to this study type
-    /// </summary>
-    public double RvuValue { get; set; }
-
-    /// <summary>
-    /// Classification conditions for matching procedure text
-    /// </summary>
-    public List<ClassificationCondition> Conditions { get; set; } = new();
-}
-
-/// <summary>
 /// A single classification condition with required/excluded keywords
 /// </summary>
 public class ClassificationCondition

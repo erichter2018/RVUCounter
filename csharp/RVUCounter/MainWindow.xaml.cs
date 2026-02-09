@@ -187,26 +187,6 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private void Study_RightClick(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is Border border && border.DataContext is StudyRecord study)
-        {
-            var menu = new ContextMenu();
-
-            var deleteItem = new MenuItem
-            {
-                Header = $"Delete: {study.StudyType} ({study.Rvu:F2} RVU)"
-            };
-            deleteItem.Click += (s, args) =>
-            {
-                ViewModel?.DeleteStudyCommand.Execute(study);
-            };
-
-            menu.Items.Add(deleteItem);
-            menu.IsOpen = true;
-        }
-    }
-
     private void PaceCar_Click(object sender, MouseButtonEventArgs e)
     {
         if (ViewModel == null) return;

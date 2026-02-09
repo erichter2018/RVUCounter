@@ -341,6 +341,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // Circuit breaker for Clario enrichment — exponential backoff on repeated failures
     private int _clarioFailureCount;
+    private readonly object _clarioBackoffLock = new();
     private DateTime _clarioBackoffUntil = DateTime.MinValue;
 
     // ===========================================
@@ -1674,7 +1675,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Use hardcoded compensation rates based on study completion time and role
         return CompensationRates.CalculateCompensation(
             record.Rvu,
-            record.Timestamp,
+            record.TimeFinished ?? record.Timestamp,
             _dataManager.Settings.Role);
     }
 
@@ -1878,7 +1879,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     alreadyCached = _clarioPatientClassCache.ContainsKey(accession);
                 }
-                if (!alreadyCached && DateTime.Now >= _clarioBackoffUntil)
+                bool pastBackoff;
+                lock (_clarioBackoffLock) { pastBackoff = DateTime.Now >= _clarioBackoffUntil; }
+                if (!alreadyCached && pastBackoff)
                 {
                     _ = Task.Run(() => PerformClarioEnrichment(accession));
                 }
@@ -1944,8 +1947,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // Success — reset circuit breaker
-            _clarioFailureCount = 0;
-            _clarioBackoffUntil = DateTime.MinValue;
+            Interlocked.Exchange(ref _clarioFailureCount, 0);
+            lock (_clarioBackoffLock) { _clarioBackoffUntil = DateTime.MinValue; }
 
             Log.Debug("Clario enrichment for {Accession}: {PatientClass}",
                 accession, clarioData.PatientClass);
@@ -1991,11 +1994,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void RecordClarioFailure()
     {
-        _clarioFailureCount++;
-        double backoffSeconds = Math.Min(Math.Pow(2, _clarioFailureCount) * 5, 60);
-        _clarioBackoffUntil = DateTime.Now.AddSeconds(backoffSeconds);
+        var count = Interlocked.Increment(ref _clarioFailureCount);
+        double backoffSeconds = Math.Min(Math.Pow(2, count) * 5, 60);
+        lock (_clarioBackoffLock) { _clarioBackoffUntil = DateTime.Now.AddSeconds(backoffSeconds); }
         Log.Debug("Clario circuit breaker: failure #{Count}, backing off for {Seconds:F0}s",
-            _clarioFailureCount, backoffSeconds);
+            count, backoffSeconds);
+    }
+
+    // Pre-frozen brush for "already recorded" accession display
+    private static readonly SolidColorBrush AlreadyRecordedBrush = CreateFrozenBrush(0xC6, 0x28, 0x28);
+    private static SolidColorBrush CreateFrozenBrush(byte r, byte g, byte b)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        brush.Freeze();
+        return brush;
     }
 
     // Invalid procedure values that indicate "no study" (matches Python)
@@ -2385,7 +2397,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentAccessionDisplay = IsCurrentStudyAlreadyRecorded ? "already recorded" : currentAccession;
                 // Red (#C62828) for "already recorded", gray otherwise (like Python)
                 CurrentAccessionColor = IsCurrentStudyAlreadyRecorded
-                    ? new SolidColorBrush(Color.FromRgb(0xC6, 0x28, 0x28))
+                    ? AlreadyRecordedBrush
                     : Brushes.Gray;
 
                 // Match study type for display
@@ -2686,8 +2698,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     Log.Information("Auto-ending shift due to {Seconds:F0}s of inactivity (threshold: {Threshold}s)",
                         secondsSinceLastActivity, InactivityThresholdSeconds);
 
-                    // End shift at the time of the last study
-                    _dataManager.Database.EndCurrentShift(_lastStudyRecordedTime.Value);
+                    // End shift at the time of the last activity
+                    _dataManager.Database.EndCurrentShift(lastActivity.Value);
                     IsShiftActive = false;
                     ShiftStatus = "Auto-ended (inactive)";
                     _shiftStart = null;
@@ -3618,6 +3630,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
 
         _statusRevertCts?.Cancel();
+        _statusRevertCts?.Dispose();
         var cts = new CancellationTokenSource();
         _statusRevertCts = cts;
 

@@ -1,4 +1,5 @@
 using System.Windows;
+using RVUCounter.Core;
 
 namespace RVUCounter.Views;
 
@@ -9,6 +10,7 @@ public partial class DropboxCodeDialog : Window
     public DropboxCodeDialog()
     {
         InitializeComponent();
+        ThemeManager.ApplyCurrentThemeTitleBar(this);
         CodeTextBox.Focus();
     }
 

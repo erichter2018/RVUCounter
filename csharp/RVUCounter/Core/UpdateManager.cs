@@ -17,10 +17,21 @@ public class UpdateManager
     private readonly string _currentVersion;
     private readonly string _githubOwner;
     private readonly string _githubRepo;
-    private readonly HttpClient _httpClient;
 
     private static readonly TimeSpan ApiTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(5);
+    private static readonly HttpClient _httpClient = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
+    {
+        var client = new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = true,
+            MaxAutomaticRedirections = 10
+        });
+        client.DefaultRequestHeaders.Add("User-Agent", $"RVUCounter/{Config.AppVersion}");
+        return client;
+    }
 
     public UpdateManager(
         string? currentVersion = null,
@@ -30,13 +41,6 @@ public class UpdateManager
         _currentVersion = currentVersion ?? GetCurrentVersion();
         _githubOwner = githubOwner ?? Config.GitHubOwner;
         _githubRepo = githubRepo ?? Config.GitHubRepo;
-        _httpClient = new HttpClient(new HttpClientHandler
-        {
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 10
-        });
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", $"RVUCounter/{_currentVersion}");
-        _httpClient.DefaultRequestHeaders.Add("Accept", "application/octet-stream");
     }
 
     /// <summary>

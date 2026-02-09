@@ -194,7 +194,7 @@ public partial class PaceComparisonDialog : Window
                 {
                     Text = $"  {FormatShiftLabel(shift)} ({shift.TotalRvu:F1} RVU)",
                     FontSize = 11,
-                    Foreground = (Brush)FindResource("PrimaryTextBrush")
+                    Foreground = (TryFindResource("PrimaryTextBrush") as Brush) ?? Brushes.Black
                 };
 
                 border.Child = text;
@@ -388,7 +388,7 @@ public partial class PaceComparisonDialog : Window
     {
         if (sender is TextBlock text)
         {
-            text.Foreground = (Brush)FindResource("PrimaryTextBrush");
+            text.Foreground = (TryFindResource("PrimaryTextBrush") as Brush) ?? Brushes.Black;
         }
     }
 

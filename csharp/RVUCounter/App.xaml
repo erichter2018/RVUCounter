@@ -16,9 +16,7 @@
         <converters:TimeAgoConverter x:Key="TimeAgoConverter"/>
         <converters:DurationConverter x:Key="DurationConverter"/>
         <converters:ModalityColorConverter x:Key="ModalityColorConverter"/>
-        <converters:PaceDiffConverter x:Key="PaceDiffConverter"/>
         <converters:SKColorToColorConverter x:Key="SKColorToColorConverter"/>
-        <converters:DollarToGreenConverter x:Key="DollarToGreenConverter"/>
         <converters:DollarPartConverter x:Key="DollarPartConverter"/>
         <converters:NonDollarPartConverter x:Key="NonDollarPartConverter"/>
         <converters:TeamBarWidthConverter x:Key="TeamBarWidthConverter"/>

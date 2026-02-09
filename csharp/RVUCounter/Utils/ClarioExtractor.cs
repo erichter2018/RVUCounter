@@ -414,7 +414,7 @@ public static class ClarioExtractor
                     Depth = depth,
                     AutomationId = automationId.Trim(),
                     Name = name.Trim(),
-                    Text = text.Length > 100 ? text.Substring(0, 100) : text.Trim()
+                    Text = text.Length > 100 ? text.Substring(0, 100).Trim() : text.Trim()
                 });
             }
 
@@ -667,6 +667,9 @@ public static class ClarioExtractor
         return "";
     }
 
+    // Regex to match standalone "ED" or "ER" (whole word only) for normalization
+    private static readonly Regex StandaloneEdErRegex = new(@"\b(ED|ER)\b", RegexOptions.Compiled);
+
     /// <summary>
     /// Combine Priority and Class into a single patient_class string (like Python's _combine_priority_and_class_clario).
     /// </summary>
@@ -675,14 +678,14 @@ public static class ClarioExtractor
         priorityValue = priorityValue?.Trim() ?? "";
         classValue = classValue?.Trim() ?? "";
 
-        // Normalize: Replace ED/ER with "Emergency"
+        // Normalize: Replace standalone ED/ER with "Emergency" (whole word only)
         if (!string.IsNullOrEmpty(priorityValue))
         {
-            priorityValue = priorityValue.Replace("ED", "Emergency").Replace("ER", "Emergency");
+            priorityValue = StandaloneEdErRegex.Replace(priorityValue, "Emergency");
         }
         if (!string.IsNullOrEmpty(classValue))
         {
-            classValue = classValue.Replace("ED", "Emergency").Replace("ER", "Emergency");
+            classValue = StandaloneEdErRegex.Replace(classValue, "Emergency");
         }
 
         // Extract urgency from Priority

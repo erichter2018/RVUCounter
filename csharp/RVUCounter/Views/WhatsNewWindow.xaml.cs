@@ -13,7 +13,7 @@ namespace RVUCounter.Views;
 /// </summary>
 public partial class WhatsNewWindow : Window
 {
-    public new string Title { get; set; }
+    public string HeaderTitle { get; set; } = "";
 
     public WhatsNewWindow(string? version = null)
     {
@@ -25,7 +25,9 @@ public partial class WhatsNewWindow : Window
         DataContext = this;
 
         version ??= Config.AppVersion.Split(' ')[0];
-        Title = $"What's New in RVU Counter {version}";
+        var titleText = $"What's New in RVU Counter {version}";
+        HeaderTitle = titleText;
+        Title = titleText; // Sets Window.Title for the title bar
 
         LoadContent(version);
     }

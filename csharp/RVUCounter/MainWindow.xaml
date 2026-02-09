@@ -18,9 +18,6 @@
     </Window.DataContext>
     
     <Window.Resources>
-        <!-- Converters -->
-        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
-        
         <!-- Stat Row Style - uses DynamicResource for theming and font sizes -->
         <Style x:Key="StatLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}"/>

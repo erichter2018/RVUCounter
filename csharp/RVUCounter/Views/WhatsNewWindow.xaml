@@ -15,7 +15,7 @@
 
         <!-- Header -->
         <TextBlock Grid.Row="0"
-                   Text="{Binding Title}"
+                   Text="{Binding HeaderTitle}"
                    FontSize="18"
                    FontWeight="Bold"
                    Margin="0,0,0,15"

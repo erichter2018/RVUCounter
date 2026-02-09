@@ -30,6 +30,10 @@ public static class MosaicExtractor
         "DRAFTED", "UNDRAFTED", "SIGNED", "UNSIGNED", "PRELIMINARY", "FINAL"
     };
 
+    // Static compiled regexes for accession extraction (avoid allocation per call)
+    private static readonly Regex AccessionPattern1 = new(@"\b[A-Z]{0,3}\d{2,}[A-Z0-9]*\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex AccessionPattern2 = new(@"\b[A-Z]{2,3}\d{5,10}\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
     /// Find the Mosaic Info Hub main window.
     /// </summary>
@@ -367,14 +371,7 @@ public static class MosaicExtractor
     {
         var accessions = new List<string>();
 
-        // Common accession patterns
-        // Pattern 1: Alphanumeric with at least 2 digits, 6-15 chars
-        var pattern1 = new Regex(@"\b[A-Z]{0,3}\d{2,}[A-Z0-9]*\b", RegexOptions.IgnoreCase);
-
-        // Pattern 2: Format like "ACC12345" or "12345678"
-        var pattern2 = new Regex(@"\b[A-Z]{2,3}\d{5,10}\b", RegexOptions.IgnoreCase);
-
-        foreach (Match match in pattern1.Matches(text))
+        foreach (Match match in AccessionPattern1.Matches(text))
         {
             var candidate = match.Value.Trim();
             if (WindowExtraction.IsAccessionLike(candidate))
@@ -383,7 +380,7 @@ public static class MosaicExtractor
             }
         }
 
-        foreach (Match match in pattern2.Matches(text))
+        foreach (Match match in AccessionPattern2.Matches(text))
         {
             var candidate = match.Value.Trim();
             if (!accessions.Contains(candidate) && WindowExtraction.IsAccessionLike(candidate))
@@ -397,6 +394,11 @@ public static class MosaicExtractor
 
 
 
+    // Compiled regexes for patient class word-boundary matching
+    private static readonly Regex IpWordRegex = new(@"\bIP\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex OpWordRegex = new(@"\bOP\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ErEdWordRegex = new(@"\b(ER|ED)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
     /// Extract patient class from text.
     /// </summary>
@@ -404,11 +406,11 @@ public static class MosaicExtractor
     {
         var lower = text.ToLowerInvariant();
 
-        if (lower.Contains("inpatient") || lower.Contains("ip"))
+        if (lower.Contains("inpatient") || IpWordRegex.IsMatch(text))
             return "Inpatient";
-        if (lower.Contains("outpatient") || lower.Contains("op"))
+        if (lower.Contains("outpatient") || OpWordRegex.IsMatch(text))
             return "Outpatient";
-        if (lower.Contains("emergency") || lower.Contains("er ") || lower.Contains("ed "))
+        if (lower.Contains("emergency") || ErEdWordRegex.IsMatch(text))
             return "Emergency";
 
         return null;

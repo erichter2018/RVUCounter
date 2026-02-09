@@ -365,7 +365,10 @@ public partial class StatisticsViewModel : ObservableObject
         if (ModalityColors.TryGetValue(modality.ToUpperInvariant(), out var color))
             return color;
         // Fallback: generate a consistent color from the modality name
-        var hash = modality.GetHashCode();
+        // Use deterministic hash (String.GetHashCode is non-deterministic across restarts in .NET Core)
+        int hash = 5381;
+        foreach (char c in modality)
+            hash = ((hash << 5) + hash) + c;
         return new SKColor(
             (byte)((hash >> 16) & 0xFF | 0x40),
             (byte)((hash >> 8) & 0xFF | 0x40),
@@ -549,9 +552,9 @@ public partial class StatisticsViewModel : ObservableObject
             Shifts.Add(shift);
         }
 
-        // Add current shift if exists
+        // Add current shift if exists and not already in the list
         var current = _dataManager.Database.GetCurrentShift();
-        if (current != null)
+        if (current != null && !Shifts.Any(s => s.Id == current.Id))
         {
             var currentRecords = _dataManager.Database.GetRecordsForShift(current.Id);
             current.TotalStudies = currentRecords.Count;

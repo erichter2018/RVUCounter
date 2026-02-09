@@ -658,19 +658,6 @@ public class ExcelChecker
         return 0;
     }
 
-    private string NormalizeAccession(string accession)
-    {
-        if (string.IsNullOrEmpty(accession))
-            return "";
-
-        // Remove common prefixes and normalize
-        return accession
-            .Replace("-", "")
-            .Replace(" ", "")
-            .ToUpperInvariant()
-            .Trim();
-    }
-
     /// <summary>
     /// Generate audit report text.
     /// </summary>
@@ -726,62 +713,6 @@ public class ExcelChecker
             }
             if (result.ExtraInDbDetails.Count > 20)
                 sb.AppendLine($"  ... and {result.ExtraInDbDetails.Count - 20} more");
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Generate audit report text (legacy method for compatibility).
-    /// </summary>
-    private string GenerateReportTextLegacy(ExcelAuditResult result)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("=== EXCEL AUDIT REPORT (LEGACY) ===");
-        sb.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        sb.AppendLine($"Excel File: {Path.GetFileName(result.ExcelPath)}");
-        sb.AppendLine($"Date Range: {result.StartDate:yyyy-MM-dd} to {result.EndDate:yyyy-MM-dd}");
-        sb.AppendLine();
-
-        sb.AppendLine("SUMMARY:");
-        sb.AppendLine($"  Total Excel Records: {result.TotalExcelInRange}");
-        sb.AppendLine($"  Total Database Records: {result.TotalDb}");
-        sb.AppendLine($"  Matched: {result.Matched}");
-        sb.AppendLine($"  Missing from DB: {result.MissingFromDb}");
-        sb.AppendLine($"  Extra in DB: {result.ExtraInDb}");
-        sb.AppendLine();
-
-        sb.AppendLine("RVU COMPARISON:");
-        sb.AppendLine($"  Excel RVU: {result.TotalExcelRvu:F1}");
-        sb.AppendLine($"  Database RVU: {result.TotalDbRvu:F1}");
-        sb.AppendLine($"  Difference: {result.RvuDifference:F1}");
-        sb.AppendLine();
-
-        if (result.MissingFromDbDetails.Count > 0)
-        {
-            sb.AppendLine("MISSING FROM DATABASE:");
-            foreach (var record in result.MissingFromDbDetails.Take(50))
-            {
-                sb.AppendLine($"  {record.Timestamp:MM/dd HH:mm} - {record.Accession} - {record.Procedure}");
-            }
-            if (result.MissingFromDbDetails.Count > 50)
-            {
-                sb.AppendLine($"  ... and {result.MissingFromDbDetails.Count - 50} more");
-            }
-            sb.AppendLine();
-        }
-
-        if (result.ExtraInDbDetails.Count > 0)
-        {
-            sb.AppendLine("EXTRA IN DATABASE:");
-            foreach (var record in result.ExtraInDbDetails.Take(50))
-            {
-                sb.AppendLine($"  {record.Timestamp:MM/dd HH:mm} - {record.Accession} - {record.Procedure}");
-            }
-            if (result.ExtraInDbDetails.Count > 50)
-            {
-                sb.AppendLine($"  ... and {result.ExtraInDbDetails.Count - 50} more");
-            }
         }
 
         return sb.ToString();

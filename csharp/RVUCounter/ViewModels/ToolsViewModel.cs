@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using RVUCounter.Core;
 using RVUCounter.Data;
 using RVUCounter.Logic;
 using RVUCounter.Models;
@@ -20,7 +21,6 @@ public partial class ToolsViewModel : ObservableObject
     private readonly ExcelChecker _excelChecker;
     private readonly PayrollSyncManager _payrollSyncManager;
     private readonly BackupManager _backupManager;
-    private readonly DatabaseRepair _databaseRepair;
 
     [ObservableProperty]
     private string _statusText = "Ready";
@@ -77,11 +77,8 @@ public partial class ToolsViewModel : ObservableObject
         _onDatabaseChanged = onDatabaseChanged;
         _excelChecker = new ExcelChecker(dataManager);
         _payrollSyncManager = new PayrollSyncManager(dataManager);
-        _databaseRepair = new DatabaseRepair(dataManager);
 
-        var dbPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "RVUCounter", "database.db");
+        var dbPath = Config.GetDatabaseFile(PlatformUtils.GetAppRoot());
         _backupManager = new BackupManager(
             dbPath,
             () => dataManager.Settings,
@@ -97,6 +94,7 @@ public partial class ToolsViewModel : ObservableObject
         try
         {
             TotalShifts = _dataManager.Database.GetAllShifts().Count;
+            // TODO: Use SQL aggregate query instead of loading all records
             var allRecords = _dataManager.Database.GetAllRecords();
             TotalStudies = allRecords.Count;
             TotalRvu = allRecords.Sum(r => r.Rvu);
@@ -794,9 +792,7 @@ public partial class ToolsViewModel : ObservableObject
 
             try
             {
-                var sourcePath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "RVUCounter", "database.db");
+                var sourcePath = Config.GetDatabaseFile(PlatformUtils.GetAppRoot());
 
                 if (File.Exists(sourcePath))
                 {
@@ -873,9 +869,7 @@ public partial class ToolsViewModel : ObservableObject
 
             try
             {
-                var destPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "RVUCounter", "database.db");
+                var destPath = Config.GetDatabaseFile(PlatformUtils.GetAppRoot());
 
                 // Create backup of current
                 if (File.Exists(destPath))

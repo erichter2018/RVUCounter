@@ -13,9 +13,16 @@ public class YamlUpdateManager
 {
     private readonly string _localRulesPath;
     private readonly string _remoteUrl;
-    private readonly HttpClient _httpClient;
 
     private static readonly Regex VersionRegex = new(@"^#\s*version:\s*([\d.]+)", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    private static readonly HttpClient _httpClient = CreateHttpClient();
+
+    private static HttpClient CreateHttpClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Add("User-Agent", "RVUCounter/2.0");
+        return client;
+    }
 
     public YamlUpdateManager(
         string localRulesPath,
@@ -23,8 +30,6 @@ public class YamlUpdateManager
     {
         _localRulesPath = localRulesPath;
         _remoteUrl = remoteUrl ?? "https://raw.githubusercontent.com/erichter/RVUCounter/main/python/settings/rvu_rules.yaml";
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "RVUCounter/2.0");
     }
 
     /// <summary>

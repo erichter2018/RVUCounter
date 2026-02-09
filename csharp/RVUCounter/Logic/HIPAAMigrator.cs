@@ -1,5 +1,6 @@
 using System.IO;
 using Microsoft.Data.Sqlite;
+using RVUCounter.Core;
 using RVUCounter.Data;
 using Serilog;
 
@@ -22,9 +23,7 @@ public class HIPAAMigrator
     {
         _dataManager = dataManager;
         _backupManager = backupManager;
-        _dbPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "RVUCounter", "database.db");
+        _dbPath = Core.Config.GetDatabaseFile(PlatformUtils.GetAppRoot());
     }
 
     /// <summary>
@@ -340,11 +339,3 @@ public class MigrationResult
     public int BackupFilesMigrated { get; set; }
 }
 
-/// <summary>
-/// Custom exception for migration failures.
-/// </summary>
-public class MigrationException : Exception
-{
-    public MigrationException(string message) : base(message) { }
-    public MigrationException(string message, Exception inner) : base(message, inner) { }
-}

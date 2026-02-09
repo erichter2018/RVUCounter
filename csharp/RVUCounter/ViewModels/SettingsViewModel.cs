@@ -1144,7 +1144,6 @@ public partial class SettingsViewModel : ObservableObject
         settings.AlwaysOnTop = AlwaysOnTop;
         settings.StartMinimized = StartMinimized;
         settings.AutoResumeOnStartup = AutoResumeOnStartup;
-        settings.DarkMode = preset.IsDark;
         settings.ShowTime = ShowTime;
         settings.GlobalFontSizeAdjustment = GlobalFontSizeAdjustment;
         settings.Role = Role;

@@ -12,7 +12,7 @@ public class DocManager
 {
     private readonly string _docDir;
     private readonly string _baseUrl;
-    private readonly HttpClient _httpClient;
+    private static readonly HttpClient _httpClient = CreateHttpClient();
 
     /// <summary>
     /// Core documentation files required for the app.
@@ -26,15 +26,19 @@ public class DocManager
         "YAML_Migration.md"
     };
 
+    private static HttpClient CreateHttpClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Add("User-Agent", "RVU-Counter-Doc-Healer");
+        client.Timeout = TimeSpan.FromSeconds(10);
+        return client;
+    }
+
     public DocManager(string? rootDir = null)
     {
         var root = rootDir ?? PlatformUtils.GetAppRoot();
         _docDir = Path.Combine(root, "documentation");
         _baseUrl = $"https://raw.githubusercontent.com/{Config.GitHubOwner}/{Config.GitHubRepo}/{Config.BackupBranch}/documentation";
-
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "RVU-Counter-Doc-Healer");
-        _httpClient.Timeout = TimeSpan.FromSeconds(10);
     }
 
     /// <summary>
