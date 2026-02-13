@@ -241,6 +241,9 @@ public partial class StatisticsViewModel : ObservableObject
             _dataManager.Database.DeleteRecord(row.RecordId);
             AllStudiesData.Remove(row);
 
+            // Remove from in-memory cache so it stays gone on refresh
+            _allRecords.RemoveAll(r => r.Id == row.RecordId);
+
             // Update row numbers
             for (int i = 0; i < AllStudiesData.Count; i++)
                 AllStudiesData[i].RowNumber = i + 1;
@@ -473,6 +476,19 @@ public partial class StatisticsViewModel : ObservableObject
     [ObservableProperty]
     private Shift? _selectedShift;
 
+    // Category-based period selector
+    [ObservableProperty]
+    private string _selectedCategory = "shifts";
+
+    [ObservableProperty]
+    private ObservableCollection<PeriodItem> _periodItems = new();
+
+    [ObservableProperty]
+    private PeriodItem? _selectedPeriodItem;
+
+    public bool ShowPeriodList => SelectedCategory is "shifts" or "months" or "years";
+    public bool ShowCustomDatePickers => SelectedCategory == "custom";
+
     // Comparison view - selecting two shifts
     [ObservableProperty]
     private Shift? _comparisonShift1;
@@ -523,16 +539,18 @@ public partial class StatisticsViewModel : ObservableObject
         LoadShifts();
         LoadRecords();
 
-        // Default to current shift if exists, otherwise prior shift
-        var currentShift = _dataManager.Database.GetCurrentShift();
-        if (currentShift != null)
+        // Initialize with Shifts category, auto-select current/first shift
+        _selectedCategory = "shifts";
+        PopulateShiftItems();
+        if (PeriodItems.Any())
         {
-            SelectedPeriod = "current_shift";
-        }
-        else if (Shifts.Any())
-        {
-            SelectedShift = Shifts.FirstOrDefault();
-            SelectedPeriod = "selected_shift";
+            _selectedPeriodItem = PeriodItems[0];
+            var firstShift = PeriodItems[0].Shift;
+            if (firstShift != null)
+            {
+                _selectedShift = firstShift;
+                _selectedPeriod = firstShift.IsActive ? "current_shift" : "selected_shift";
+            }
         }
 
         RefreshData();
@@ -570,6 +588,158 @@ public partial class StatisticsViewModel : ObservableObject
         _allRecords = _dataManager.Database.GetAllRecords();
     }
 
+    partial void OnSelectedCategoryChanged(string value)
+    {
+        OnPropertyChanged(nameof(ShowPeriodList));
+        OnPropertyChanged(nameof(ShowCustomDatePickers));
+
+        switch (value)
+        {
+            case "shifts":
+                PopulateShiftItems();
+                if (PeriodItems.Any())
+                    SelectedPeriodItem = PeriodItems[0];
+                break;
+            case "months":
+                PopulateMonthItems();
+                if (PeriodItems.Any())
+                    SelectedPeriodItem = PeriodItems[0];
+                break;
+            case "years":
+                PopulateYearItems();
+                if (PeriodItems.Any())
+                    SelectedPeriodItem = PeriodItems[0];
+                break;
+            case "all_time":
+                PeriodItems.Clear();
+                SelectedPeriodItem = null;
+                SelectedPeriod = "all_time";
+                RefreshData();
+                break;
+            case "custom":
+                PeriodItems.Clear();
+                SelectedPeriodItem = null;
+                SelectedPeriod = "custom_range";
+                RefreshData();
+                break;
+        }
+    }
+
+    partial void OnSelectedPeriodItemChanged(PeriodItem? value)
+    {
+        if (value == null) return;
+
+        if (value.ShiftId.HasValue)
+        {
+            // Shift item — use the existing shift-based path
+            SelectedShift = value.Shift;
+            SelectedPeriod = value.Shift?.IsActive == true ? "current_shift" : "selected_shift";
+        }
+        else
+        {
+            // Month or year item — use date range path
+            SelectedPeriod = "date_range";
+        }
+        RefreshData();
+    }
+
+    private void PopulateShiftItems()
+    {
+        PeriodItems.Clear();
+        foreach (var shift in Shifts)
+        {
+            var prefix = shift.IsActive ? "\u25b6 " : ""; // ► for current
+            PeriodItems.Add(new PeriodItem
+            {
+                Category = "shifts",
+                DisplayLabel = prefix + shift.DisplayLabel,
+                StartDate = shift.ShiftStart,
+                EndDate = shift.ShiftEnd,
+                ShiftId = shift.Id,
+                Shift = shift,
+                StudyCount = shift.TotalStudies,
+                TotalRvu = shift.TotalRvu
+            });
+        }
+    }
+
+    private void PopulateMonthItems()
+    {
+        PeriodItems.Clear();
+        var grouped = _allRecords
+            .GroupBy(r => new { r.Timestamp.Year, r.Timestamp.Month })
+            .OrderByDescending(g => g.Key.Year).ThenByDescending(g => g.Key.Month);
+
+        foreach (var g in grouped)
+        {
+            var start = new DateTime(g.Key.Year, g.Key.Month, 1);
+            var end = start.AddMonths(1);
+            var count = g.Count();
+            var rvu = g.Sum(r => r.Rvu);
+            PeriodItems.Add(new PeriodItem
+            {
+                Category = "months",
+                DisplayLabel = $"{start:MMMM yyyy} ({count:N0}, {rvu:N1} RVU)",
+                StartDate = start,
+                EndDate = end,
+                StudyCount = count,
+                TotalRvu = rvu
+            });
+        }
+    }
+
+    private void PopulateYearItems()
+    {
+        PeriodItems.Clear();
+        var grouped = _allRecords
+            .GroupBy(r => r.Timestamp.Year)
+            .OrderByDescending(g => g.Key);
+
+        foreach (var g in grouped)
+        {
+            var start = new DateTime(g.Key, 1, 1);
+            var end = start.AddYears(1);
+            var count = g.Count();
+            var rvu = g.Sum(r => r.Rvu);
+            PeriodItems.Add(new PeriodItem
+            {
+                Category = "years",
+                DisplayLabel = $"{g.Key} ({count:N0}, {rvu:N1} RVU)",
+                StartDate = start,
+                EndDate = end,
+                StudyCount = count,
+                TotalRvu = rvu
+            });
+        }
+    }
+
+    /// <summary>
+    /// Calculate total worked hours from records by merging overlapping shift intervals.
+    /// Reconciled shifts can overlap with real-time shifts; merging prevents double-counting.
+    /// </summary>
+    private static double CalculateMergedHours(List<StudyRecord> records)
+    {
+        if (!records.Any()) return 0;
+        var intervals = records
+            .GroupBy(r => r.ShiftId)
+            .Select(g =>
+            {
+                var times = g.Select(r => r.TimeFinished ?? r.Timestamp).ToList();
+                return (Start: times.Min(), End: times.Max());
+            })
+            .OrderBy(i => i.Start)
+            .ToList();
+        var merged = new List<(DateTime Start, DateTime End)>();
+        foreach (var interval in intervals)
+        {
+            if (merged.Count > 0 && interval.Start <= merged[^1].End)
+                merged[^1] = (merged[^1].Start, interval.End > merged[^1].End ? interval.End : merged[^1].End);
+            else
+                merged.Add(interval);
+        }
+        return Math.Max(merged.Sum(i => Math.Max((i.End - i.Start).TotalHours, 1)), 1);
+    }
+
     private List<StudyRecord> GetRecordsForPeriod()
     {
         switch (SelectedPeriod)
@@ -584,67 +754,21 @@ public partial class StatisticsViewModel : ObservableObject
                 PeriodDescription = "No Active Shift";
                 return new List<StudyRecord>();
 
-            case "prior_shift":
-                var priorShift = Shifts.FirstOrDefault(s => !s.IsActive); // Assumes Shifts is ordered desc
-                if (priorShift != null)
-                {
-                    PeriodDescription = $"Prior Shift ({priorShift.DisplayLabel})";
-                     return _dataManager.Database.GetRecordsForShift(priorShift.Id);
-                }
-                PeriodDescription = "No Prior Shift Found";
-                return new List<StudyRecord>();
-
-            case "today":
-                var today = DateTime.Today;
-                PeriodDescription = $"Today ({today:M/d/yyyy})";
-                return _allRecords.Where(r => r.Timestamp.Date == today).ToList();
-
-            case "this_week":
-                var weekStart = DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek);
-                PeriodDescription = $"This Week ({weekStart:M/d} - {weekStart.AddDays(6):M/d})";
-                return _allRecords.Where(r => r.Timestamp >= weekStart).ToList();
-
-            case "this_work_week":
-                // Work week = Monday to Friday
-                var daysSinceMonday = ((int)DateTime.Today.DayOfWeek + 6) % 7; // Monday = 0
-                var workWeekStart = DateTime.Today.AddDays(-daysSinceMonday);
-                var workWeekEnd = workWeekStart.AddDays(4); // Friday
-                PeriodDescription = $"This Work Week ({workWeekStart:M/d} - {workWeekEnd:M/d})";
-                return _allRecords.Where(r => r.Timestamp >= workWeekStart && r.Timestamp < workWeekEnd.AddDays(1)).ToList();
-
-            case "last_work_week":
-                var lastDaysSinceMonday = ((int)DateTime.Today.DayOfWeek + 6) % 7;
-                var lastWorkWeekStart = DateTime.Today.AddDays(-lastDaysSinceMonday - 7);
-                var lastWorkWeekEnd = lastWorkWeekStart.AddDays(4);
-                PeriodDescription = $"Last Work Week ({lastWorkWeekStart:M/d} - {lastWorkWeekEnd:M/d})";
-                return _allRecords.Where(r => r.Timestamp >= lastWorkWeekStart && r.Timestamp < lastWorkWeekEnd.AddDays(1)).ToList();
-
-            case "this_month":
-                var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
-                PeriodDescription = $"This Month ({monthStart:MMMM yyyy})";
-                return _allRecords.Where(r => r.Timestamp >= monthStart).ToList();
-
-            case "last_month":
-                var lastMonthEnd = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddTicks(-1);
-                var lastMonthStart = new DateTime(lastMonthEnd.Year, lastMonthEnd.Month, 1);
-                PeriodDescription = $"Last Month ({lastMonthStart:MMMM yyyy})";
-                return _allRecords.Where(r => r.Timestamp >= lastMonthStart && r.Timestamp <= lastMonthEnd).ToList();
-
-            case "last_3_months":
-                var threeMonthsAgo = DateTime.Today.AddMonths(-3);
-                PeriodDescription = $"Last 3 Months ({threeMonthsAgo:M/d/yy} - {DateTime.Today:M/d/yy})";
-                return _allRecords.Where(r => r.Timestamp >= threeMonthsAgo).ToList();
-
-            case "last_year":
-                var oneYearAgo = DateTime.Today.AddYears(-1);
-                PeriodDescription = $"Last Year ({oneYearAgo:M/d/yy} - {DateTime.Today:M/d/yy})";
-                return _allRecords.Where(r => r.Timestamp >= oneYearAgo).ToList();
-
             case "selected_shift":
                 if (SelectedShift != null)
                 {
                     PeriodDescription = $"Shift: {SelectedShift.DisplayLabel}";
                     return _dataManager.Database.GetRecordsForShift(SelectedShift.Id);
+                }
+                return new List<StudyRecord>();
+
+            case "date_range":
+                if (SelectedPeriodItem != null)
+                {
+                    PeriodDescription = SelectedPeriodItem.DisplayLabel;
+                    var start = SelectedPeriodItem.StartDate;
+                    var end = SelectedPeriodItem.EndDate ?? DateTime.Now;
+                    return _allRecords.Where(r => r.Timestamp >= start && r.Timestamp < end).ToList();
                 }
                 return new List<StudyRecord>();
 
@@ -656,7 +780,7 @@ public partial class StatisticsViewModel : ObservableObject
                 PeriodDescription = "All Time";
                 return _allRecords;
         }
-        }
+    }
 
 
     private List<StudyRecord> ExpandMultiAccessionRecords(List<StudyRecord> records)
@@ -817,10 +941,7 @@ public partial class StatisticsViewModel : ObservableObject
         if (TotalStudies > 0)
         {
             var role = _dataManager.Settings.Role ?? "Partner";
-            // Use TimeFinished for time span and compensation (like Python)
-            var finishTimes = records.Select(r => r.TimeFinished ?? r.Timestamp).ToList();
-            var timeSpan = finishTimes.Max() - finishTimes.Min();
-            var hoursSpan = Math.Max(timeSpan.TotalHours, 1);
+            var hoursSpan = CalculateMergedHours(records);
             // Calculate compensation using TimeFinished for rate lookup
             var totalComp = records.Sum(r => Core.CompensationRates.CalculateCompensation(r.Rvu, r.TimeFinished ?? r.Timestamp, role));
             var compPerHour = totalComp / hoursSpan;
@@ -855,19 +976,7 @@ public partial class StatisticsViewModel : ObservableObject
                 var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
                 var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
                 var shiftLength = _dataManager.Settings.ShiftLengthHours;
-                var actualMonthHours = 0.0;
-                if (currentMonthRecords.Any())
-                {
-                    var monthShiftGroups = currentMonthRecords.GroupBy(r => r.ShiftId);
-                    foreach (var shift in monthShiftGroups)
-                    {
-                        var shiftDuration = (shift.Max(r => r.Timestamp) - shift.Min(r => r.Timestamp)).TotalHours;
-                        shiftDuration = Math.Max(shiftDuration, 1);
-                        if (Math.Abs(shiftDuration - shiftLength) <= 0.5)
-                            shiftDuration = shiftLength;
-                        actualMonthHours += shiftDuration;
-                    }
-                }
+                var actualMonthHours = CalculateMergedHours(currentMonthRecords);
 
                 CheckAndResetMonthlyProjections();
                 var targetShifts = _dataManager.Settings.ProjectionDays;
@@ -1675,33 +1784,39 @@ public partial class StatisticsViewModel : ObservableObject
 
     partial void OnSelectedPeriodChanged(string value)
     {
-        RefreshData();
+        // Period is now set internally by category/item handlers — no action needed
     }
 
     partial void OnSelectedShiftChanged(Shift? value)
     {
-        if (value != null)
-        {
-            SelectedPeriod = "selected_shift";
-            // Always refresh - SelectedPeriod might already be "selected_shift"
-            // if user clicks different shifts, so OnSelectedPeriodChanged won't fire
-            RefreshData();
-        }
+        // Shift selection is now driven by PeriodItem selection — no action needed
     }
     [RelayCommand]
     public void DeleteShift(Shift shift)
     {
         if (shift == null) return;
-        
-        try 
+
+        try
         {
             _dataManager.Database.DeleteShift(shift.Id);
             Shifts.Remove(shift);
-            if (SelectedShift == shift)
+
+            // Also remove from PeriodItems if in shifts category
+            var periodItem = PeriodItems.FirstOrDefault(p => p.ShiftId == shift.Id);
+            if (periodItem != null)
             {
-                SelectedShift = null;
-                SelectedPeriod = "all_time"; // Reset to all time or some default
+                var wasSelected = SelectedPeriodItem == periodItem;
+                PeriodItems.Remove(periodItem);
+                if (wasSelected)
+                {
+                    SelectedPeriodItem = PeriodItems.FirstOrDefault();
+                    if (SelectedPeriodItem == null)
+                    {
+                        SelectedPeriod = "all_time";
+                    }
+                }
             }
+
             RefreshData();
         }
         catch (Exception ex)
@@ -1740,9 +1855,8 @@ public partial class StatisticsViewModel : ObservableObject
         else
         {
             var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
-            var timeSpan = records.Max(r => r.Timestamp) - records.Min(r => r.Timestamp);
-            var totalHours = Math.Max(timeSpan.TotalHours, 1);
-            var days = Math.Max(timeSpan.TotalDays, 1);
+            var totalHours = CalculateMergedHours(records);
+            var days = Math.Max((records.Max(r => r.Timestamp) - records.Min(r => r.Timestamp)).TotalDays, 1);
 
             TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
             TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
@@ -1906,9 +2020,8 @@ public partial class StatisticsViewModel : ObservableObject
 
         if (TotalStudies > 0)
         {
-            // Time calculations
-            var timeSpan = records.Max(r => r.Timestamp) - records.Min(r => r.Timestamp);
-            var hoursSpan = Math.Max(timeSpan.TotalHours, 1);
+            // Time calculations - merge overlapping shift intervals to avoid double-counting
+            var hoursSpan = CalculateMergedHours(records);
 
             TableData.Add(new StatRow { Col1 = "Hours Worked", Col2 = $"{hoursSpan:F1}" });
             TableData.Add(new StatRow { Col1 = "Comp/Hour", Col2 = $"${totalComp / hoursSpan:N2}" });
@@ -1935,25 +2048,7 @@ public partial class StatisticsViewModel : ObservableObject
 
             // Calculate actual hours worked with 9-hour rounding for qualifying shifts
             var shiftLength = _dataManager.Settings.ShiftLengthHours;
-            var actualMonthHours = 0.0;
-            if (currentMonthRecords.Any())
-            {
-                // Group by shift and calculate duration for each
-                var shiftGroups = currentMonthRecords.GroupBy(r => r.ShiftId);
-                foreach (var shift in shiftGroups)
-                {
-                    var shiftDuration = (shift.Max(r => r.Timestamp) - shift.Min(r => r.Timestamp)).TotalHours;
-                    shiftDuration = Math.Max(shiftDuration, 1); // Minimum 1 hour per shift
-
-                    // Round shifts within 30 minutes of the expected shift length to that length
-                    // (e.g., 8.5-9.5 hours rounds to 9 hours)
-                    if (Math.Abs(shiftDuration - shiftLength) <= 0.5)
-                    {
-                        shiftDuration = shiftLength;
-                    }
-                    actualMonthHours += shiftDuration;
-                }
-            }
+            var actualMonthHours = CalculateMergedHours(currentMonthRecords);
 
             // Get projection settings (these reset monthly)
             CheckAndResetMonthlyProjections();
@@ -2804,19 +2899,15 @@ public partial class StatisticsViewModel : ObservableObject
     private (DateTime startDate, DateTime endDate) GetDateRangeForPeriod()
     {
         var now = DateTime.Now;
-        var today = now.Date;
 
         return SelectedPeriod switch
         {
-            "today" => (today, now),
-            "this_week" => (today.AddDays(-(int)today.DayOfWeek), now),
-            "this_month" => (new DateTime(today.Year, today.Month, 1), now),
-            "last_month" => (new DateTime(today.Year, today.Month, 1).AddMonths(-1),
-                            new DateTime(today.Year, today.Month, 1).AddTicks(-1)),
-            "last_3_months" => (today.AddMonths(-3), now),
-            "last_year" => (today.AddYears(-1), now),
+            "current_shift" => (_dataManager.Database.GetCurrentShift()?.ShiftStart ?? now, now),
             "selected_shift" when SelectedShift != null =>
                 (SelectedShift.ShiftStart, SelectedShift.ShiftEnd ?? now),
+            "date_range" when SelectedPeriodItem != null =>
+                (SelectedPeriodItem.StartDate, SelectedPeriodItem.EndDate ?? now),
+            "custom_range" => (CustomStartDate, CustomEndDate.AddDays(1).AddTicks(-1)),
             _ => (DateTime.MinValue, now)
         };
     }

@@ -646,17 +646,37 @@ public class ExcelChecker
                 : "Unknown"
         };
 
-        // Parse timestamp
+        // Parse timestamp — ClosedXML may report date cells as DateTime, Number, or TimeSpan
+        // depending on the cell's number format in the Excel file
         if (columnMap.ContainsKey("timestamp"))
         {
             var cell = worksheet.Cell(row, columnMap["timestamp"]);
-            if (cell.DataType == XLDataType.DateTime)
+            try
             {
                 record.Timestamp = cell.GetDateTime();
             }
-            else if (DateTime.TryParse(cell.GetString(), out var dt))
+            catch
             {
-                record.Timestamp = dt;
+                // ClosedXML sometimes reads date serial numbers as TimeSpan (huge hours value).
+                // Parse "1097813:33:22" -> total hours -> OA date -> DateTime
+                var str = cell.GetString();
+                if (DateTime.TryParse(str, out var dt))
+                {
+                    record.Timestamp = dt;
+                }
+                else
+                {
+                    var parts = str.Split(':');
+                    if (parts.Length == 3
+                        && double.TryParse(parts[0], out var hours)
+                        && double.TryParse(parts[1], out var mins)
+                        && double.TryParse(parts[2], out var secs))
+                    {
+                        var oaDate = (hours + mins / 60.0 + secs / 3600.0) / 24.0;
+                        if (oaDate > 1)
+                            record.Timestamp = DateTime.FromOADate(oaDate);
+                    }
+                }
             }
         }
 

@@ -42,26 +42,11 @@
             </Setter>
         </Style>
         
-        <Style x:Key="PeriodButton" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="border" Background="Transparent" Padding="8,4" Cursor="Hand">
-                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="FontWeight" Value="Bold"/>
-                                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="{DynamicResource PanelBackgroundBrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+        <!-- PeriodItem ListBox item style -->
+        <Style x:Key="PeriodListItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
     </Window.Resources>
     
@@ -75,78 +60,67 @@
         <!-- Left Panel - Period Selection -->
         <Border Grid.Column="0" Background="{DynamicResource PanelBackgroundBrush}" Padding="12">
             <DockPanel>
-                <TextBlock DockPanel.Dock="Top" Text="Time Period" FontWeight="Bold" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,10"/>
+                <TextBlock DockPanel.Dock="Top" Text="TIME PERIOD" FontWeight="Bold" FontSize="11"
+                           Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,8"/>
 
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Current Shift"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=current_shift}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Prior Shift"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=prior_shift}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Today"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=today}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="This Week"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=this_week}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="This Work Week"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=this_work_week}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Last Work Week"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=last_work_week}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="This Month"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=this_month}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Last Month"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=last_month}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Last 3 Months"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=last_3_months}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="Last Year"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=last_year}"
-                             GroupName="Period" Margin="0,2"/>
-                <RadioButton DockPanel.Dock="Top" Style="{StaticResource PeriodButton}" Content="All Time"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=all_time}"
-                             GroupName="Period" Margin="0,2"/>
+                <!-- Category toggle buttons -->
+                <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                    <RadioButton Style="{StaticResource ViewButton}" Content="Shifts"
+                                 IsChecked="{Binding SelectedCategory, Converter={StaticResource StringToBoolConverter}, ConverterParameter=shifts}"
+                                 GroupName="Category"/>
+                    <RadioButton Style="{StaticResource ViewButton}" Content="Months"
+                                 IsChecked="{Binding SelectedCategory, Converter={StaticResource StringToBoolConverter}, ConverterParameter=months}"
+                                 GroupName="Category"/>
+                    <RadioButton Style="{StaticResource ViewButton}" Content="Years"
+                                 IsChecked="{Binding SelectedCategory, Converter={StaticResource StringToBoolConverter}, ConverterParameter=years}"
+                                 GroupName="Category"/>
+                    <RadioButton Style="{StaticResource ViewButton}" Content="All Time"
+                                 IsChecked="{Binding SelectedCategory, Converter={StaticResource StringToBoolConverter}, ConverterParameter=all_time}"
+                                 GroupName="Category"/>
+                    <RadioButton Style="{StaticResource ViewButton}" Content="Custom"
+                                 IsChecked="{Binding SelectedCategory, Converter={StaticResource StringToBoolConverter}, ConverterParameter=custom}"
+                                 GroupName="Category"/>
+                </WrapPanel>
 
-                <RadioButton DockPanel.Dock="Top" x:Name="CustomRadio" Style="{StaticResource PeriodButton}" Content="Custom Range"
-                             IsChecked="{Binding SelectedPeriod, Converter={StaticResource StringToBoolConverter}, ConverterParameter=custom_range}"
-                             GroupName="Period" Margin="0,2"/>
-
-                <StackPanel DockPanel.Dock="Top" Margin="10,0,0,0" Visibility="{Binding IsChecked, ElementName=CustomRadio, Converter={StaticResource BoolToVisibility}}">
+                <!-- Custom date pickers (visible only in Custom mode) -->
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8"
+                            Visibility="{Binding ShowCustomDatePickers, Converter={StaticResource BoolToVisibility}}">
                     <TextBlock Text="Start:" FontSize="10" Foreground="{DynamicResource SecondaryTextBrush}"/>
-                    <DatePicker SelectedDate="{Binding CustomStartDate}" Margin="0,2"/>
+                    <DatePicker SelectedDate="{Binding CustomStartDate}" Margin="0,2,0,6"/>
                     <TextBlock Text="End:" FontSize="10" Foreground="{DynamicResource SecondaryTextBrush}"/>
                     <DatePicker SelectedDate="{Binding CustomEndDate}" Margin="0,2"/>
                 </StackPanel>
 
-                <Separator DockPanel.Dock="Top" Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
-
-                <TextBlock DockPanel.Dock="Top" Text="All Shifts" FontWeight="Bold" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,10,0,8"/>
-
-                <!-- ListBox fills remaining space (no Height specified) -->
-                <ListBox ItemsSource="{Binding Shifts}" SelectedItem="{Binding SelectedShift}"
+                <!-- Period items list (visible for shifts/months/years) -->
+                <ListBox ItemsSource="{Binding PeriodItems}" SelectedItem="{Binding SelectedPeriodItem}"
                          BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}"
                          Background="{DynamicResource CardBackgroundBrush}" Foreground="{DynamicResource PrimaryTextBrush}"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ItemContainerStyle="{StaticResource PeriodListItem}"
+                         Visibility="{Binding ShowPeriodList, Converter={StaticResource BoolToVisibility}}">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border Background="Transparent" Padding="4,2"
                                     Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ListBox}}">
-                                <Border.ContextMenu>
-                                    <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
-                                        <MenuItem Header="Delete Shift"
-                                                  Command="{Binding DeleteShiftCommand}"
-                                                  CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    </ContextMenu>
-                                </Border.ContextMenu>
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Style.Triggers>
+                                            <!-- Only show context menu for shift items -->
+                                            <DataTrigger Binding="{Binding Shift}" Value="{x:Null}">
+                                                <Setter Property="ContextMenu" Value="{x:Null}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                        <Setter Property="ContextMenu">
+                                            <Setter.Value>
+                                                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem Header="Delete Shift"
+                                                              Command="{Binding DeleteShiftCommand}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext.Shift, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                </ContextMenu>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Border.Style>
                                 <TextBlock Text="{Binding DisplayLabel}" FontSize="11" TextWrapping="NoWrap"/>
                             </Border>
                         </DataTemplate>
