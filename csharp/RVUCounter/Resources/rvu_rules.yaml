@@ -22,7 +22,7 @@ rvu_table:
   CT CAP: 3.06
   CT CAP Trauma: 3.0
   CTA CAP: 3.06
-  CTA Chest + CT AP: 3.0
+  CTA Chest + CT AP: 2.68
   CTA AP: 1.68
   CT CA: 2.0
   CT AP: 1.68
@@ -72,7 +72,7 @@ rvu_table:
   CTA Runoff with Abdo/Pelvis: 2.75
   Bone Survey: 1.0
   CTA Brain and Neck: 3.5
-  CTA Brain and Neck with Perfusion: 4.65
+  CTA Brain and Neck with Perfusion: 4.5
   CT Triple Spine: 5.25
   CT Head Face and Cervical: 2.9
   CTA Lower Extremity: 1.75

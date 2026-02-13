@@ -65,8 +65,7 @@ public class UserSettings
     // Data handling
     public bool IgnoreDuplicateAccessions { get; set; } = true;
 
-    // MosaicTools integration - wait for signed/unsigned confirmation
-    public bool MosaicToolsIntegrationEnabled { get; set; } = true;
+    // MosaicTools integration - auto-detected via pipe connection
     public int MosaicToolsTimeoutSeconds { get; set; } = 5;
 
     // HIPAA compliance - always hash accessions

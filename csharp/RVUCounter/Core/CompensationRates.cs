@@ -103,7 +103,7 @@ public static class CompensationRates
     /// <returns>The total compensation in dollars.</returns>
     public static double CalculateTotalCompensation(IEnumerable<Models.StudyRecord> records, string role)
     {
-        return records.Sum(r => CalculateCompensation(r.Rvu, r.Timestamp, role));
+        return records.Sum(r => CalculateCompensation(r.Rvu, r.TimeFinished ?? r.Timestamp, role));
     }
 
     /// <summary>

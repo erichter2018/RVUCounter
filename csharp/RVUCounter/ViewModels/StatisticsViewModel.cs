@@ -625,7 +625,7 @@ public partial class StatisticsViewModel : ObservableObject
                 return _allRecords.Where(r => r.Timestamp >= monthStart).ToList();
 
             case "last_month":
-                var lastMonthEnd = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddDays(-1);
+                var lastMonthEnd = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddTicks(-1);
                 var lastMonthStart = new DateTime(lastMonthEnd.Year, lastMonthEnd.Month, 1);
                 PeriodDescription = $"Last Month ({lastMonthStart:MMMM yyyy})";
                 return _allRecords.Where(r => r.Timestamp >= lastMonthStart && r.Timestamp <= lastMonthEnd).ToList();
@@ -2812,7 +2812,7 @@ public partial class StatisticsViewModel : ObservableObject
             "this_week" => (today.AddDays(-(int)today.DayOfWeek), now),
             "this_month" => (new DateTime(today.Year, today.Month, 1), now),
             "last_month" => (new DateTime(today.Year, today.Month, 1).AddMonths(-1),
-                            new DateTime(today.Year, today.Month, 1).AddDays(-1)),
+                            new DateTime(today.Year, today.Month, 1).AddTicks(-1)),
             "last_3_months" => (today.AddMonths(-3), now),
             "last_year" => (today.AddYears(-1), now),
             "selected_shift" when SelectedShift != null =>

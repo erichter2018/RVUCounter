@@ -313,11 +313,15 @@ public class ExcelChecker
         DateTime? endDate = null,
         IProgress<int>? progress = null)
     {
+        // Normalize dates to cover full days (DatePicker gives midnight, which excludes the last day)
+        var normalizedStart = (startDate ?? DateTime.Today.AddDays(-30)).Date;
+        var normalizedEnd = (endDate ?? DateTime.Today).Date.AddDays(1).AddTicks(-1);
+
         var result = new ExcelAuditResult
         {
             ExcelPath = excelPath,
-            StartDate = startDate ?? DateTime.Today.AddDays(-30),
-            EndDate = endDate ?? DateTime.Today
+            StartDate = normalizedStart,
+            EndDate = normalizedEnd
         };
 
         if (!File.Exists(excelPath))
@@ -393,6 +397,14 @@ public class ExcelChecker
             result.TotalExcelRvu = excelRecords.Sum(r => r.Rvu);
             result.TotalDbRvu = dbRecords.Sum(r => r.Rvu);
             result.RvuDifference = result.TotalDbRvu - result.TotalExcelRvu;
+
+            // Build matched records mapping (hashed accession -> Excel record) for payroll sync
+            var excelByHash = excelRecords
+                .Where(r => !string.IsNullOrEmpty(r.Accession))
+                .ToDictionary(r => _dataManager.HashAccession(r.Accession), r => r);
+            result.MatchedRecords = matchedHashed
+                .Where(h => excelByHash.ContainsKey(h))
+                .ToDictionary(h => h, h => excelByHash[h]);
 
             result.Success = true;
             Log.Information("Excel audit complete: {Matched} matched, {Missing} missing, {Extra} extra",
@@ -728,7 +740,10 @@ public class ExcelChecker
     {
         var result = new ReconcileResult();
 
-        if (!auditResult.Success || auditResult.MissingFromDb == 0 && auditResult.ExtraInDb == 0)
+        var hasChanges = auditResult.MissingFromDb > 0 || auditResult.ExtraInDb > 0;
+        var hasMatchedToSync = auditResult.MatchedRecords.Count > 0;
+
+        if (!auditResult.Success || (!hasChanges && !hasMatchedToSync))
         {
             result.Success = true;
             result.Message = "Nothing to reconcile";
@@ -841,16 +856,27 @@ public class ExcelChecker
                     }
                 }
 
+                progress?.Report(("Syncing payroll data for matched records...", 70));
+
+                // 3. Sync time_finished and RVU for matched records from Excel
+                if (auditResult.MatchedRecords.Count > 0)
+                {
+                    var updates = auditResult.MatchedRecords
+                        .Select(kvp => (kvp.Key, kvp.Value.Timestamp, kvp.Value.Rvu))
+                        .ToList();
+                    result.RecordsUpdated = _dataManager.Database.BatchUpdatePayrollData(updates);
+                }
+
                 progress?.Report(("Cleaning up empty shifts...", 90));
 
-                // 3. Delete empty shifts in the date range
+                // 4. Delete empty shifts in the date range
                 _dataManager.Database.DeleteEmptyShifts(auditResult.StartDate, auditResult.EndDate);
 
                 progress?.Report(("Reconciliation complete", 100));
             });
 
             result.Success = true;
-            result.Message = $"Deleted {result.RecordsDeleted}, Added {result.RecordsAdded}, Created {result.ShiftsCreated} shifts";
+            result.Message = $"Deleted {result.RecordsDeleted}, Added {result.RecordsAdded}, Updated {result.RecordsUpdated}, Created {result.ShiftsCreated} shifts";
             Log.Information("Reconciliation complete: {Message}", result.Message);
         }
         catch (Exception ex)
@@ -965,6 +991,11 @@ public class ExcelAuditResult
     public double TotalDbRvu { get; set; }
     public double RvuDifference { get; set; }
 
+    /// <summary>
+    /// Matched records: hashed accession -> Excel record (for payroll sync of timestamps/RVUs).
+    /// </summary>
+    public Dictionary<string, ExcelRecord> MatchedRecords { get; set; } = new();
+
     public List<ExcelRecord> MissingFromDbDetails { get; set; } = new();
     public List<StudyRecord> ExtraInDbDetails { get; set; } = new();
 
@@ -983,6 +1014,7 @@ public class ReconcileResult
     public string Message { get; set; } = "";
     public int RecordsDeleted { get; set; }
     public int RecordsAdded { get; set; }
+    public int RecordsUpdated { get; set; }
     public int ShiftsCreated { get; set; }
 }
 

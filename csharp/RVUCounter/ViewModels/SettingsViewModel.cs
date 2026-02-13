@@ -109,9 +109,6 @@ public partial class SettingsViewModel : ObservableObject
 
     // MosaicTools integration
     [ObservableProperty]
-    private bool _mosaicToolsIntegrationEnabled;
-
-    [ObservableProperty]
     private int _mosaicToolsTimeoutSeconds;
 
     // Distraction alert
@@ -1076,7 +1073,6 @@ public partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(FontFamily));
         PopulateColorItems(settings.ThemePreset, settings.CustomThemeOverrides);
         IgnoreDuplicateAccessions = settings.IgnoreDuplicateAccessions;
-        MosaicToolsIntegrationEnabled = settings.MosaicToolsIntegrationEnabled;
         MosaicToolsTimeoutSeconds = settings.MosaicToolsTimeoutSeconds;
         DistractionAlertEnabled = settings.DistractionAlertEnabled;
         DistractionAlertMultiplier = settings.DistractionAlertMultiplier;
@@ -1148,7 +1144,6 @@ public partial class SettingsViewModel : ObservableObject
         settings.GlobalFontSizeAdjustment = GlobalFontSizeAdjustment;
         settings.Role = Role;
         settings.IgnoreDuplicateAccessions = IgnoreDuplicateAccessions;
-        settings.MosaicToolsIntegrationEnabled = MosaicToolsIntegrationEnabled;
         settings.MosaicToolsTimeoutSeconds = MosaicToolsTimeoutSeconds;
         settings.DistractionAlertEnabled = DistractionAlertEnabled;
         settings.DistractionAlertMultiplier = DistractionAlertMultiplier;

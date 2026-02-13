@@ -62,7 +62,7 @@ public partial class ToolsViewModel : ObservableObject
 
     // Computed property for whether reconcile is available
     public bool CanReconcile => LastAuditResult?.Success == true &&
-        (LastAuditResult.MissingFromDb > 0 || LastAuditResult.ExtraInDb > 0);
+        (LastAuditResult.MissingFromDb > 0 || LastAuditResult.ExtraInDb > 0 || LastAuditResult.MatchedRecords.Count > 0);
 
     // Computed property for whether time sync is available
     public bool CanApplyTimeSync => LastSyncResult?.Success == true;

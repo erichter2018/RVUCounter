@@ -32,6 +32,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // Named pipe client for MosaicTools bridge (replaces double-scraping)
     private MosaicToolsPipeClient? _pipeClient;
+    /// <summary>Whether MosaicTools pipe is currently connected (auto-detect integration).</summary>
+    private bool IsPipeConnected => _pipeClient?.IsConnected == true;
     // Track last sent shift info to avoid redundant sends
     private double _lastSentTotalRvu = -1;
     private int _lastSentRecordCount = -1;
@@ -1009,11 +1011,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Check for existing shift and resume
         LoadCurrentShift();
 
-        // Set initial status based on MosaicTools integration
-        if (_dataManager.Settings.MosaicToolsIntegrationEnabled)
-        {
-            StatusMessage = "🔗 MT: Listening";
-        }
+        // Status will update to "MT: Listening" when pipe connects
 
         // Perform startup update check (async, non-blocking)
         _ = PerformStartupUpdateCheckAsync();
@@ -1247,15 +1245,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             CalculateAndUpdateStats();
         }
 
-        // Update status for MosaicTools integration
-        if (settings.MosaicToolsIntegrationEnabled)
-        {
-            StatusMessage = "🔗 MT: Listening";
-        }
-        else
-        {
-            StatusMessage = "Ready";
-        }
+        // Update status based on pipe connection
+        StatusMessage = IsPipeConnected ? "🔗 MT: Listening" : "Ready";
 
         // Team Dashboard - reload settings and update state
         TeamCode = settings.TeamCode ?? "";
@@ -1718,13 +1709,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             IsMosaicToolsPipeConnected = connected;
             if (connected)
             {
-                Log.Information("MosaicTools pipe connected - will use pipe data instead of scraping");
+                Log.Information("MosaicTools pipe connected - integration active");
+                StatusMessage = "🔗 MT: Listening";
                 // Send current shift info immediately on connect
                 SendShiftInfoToPipe();
             }
             else
             {
                 Log.Information("MosaicTools pipe disconnected - falling back to own scraping");
+                StatusMessage = "Ready";
             }
         });
     }
@@ -2325,14 +2318,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         continue;
                     }
 
-                    // MosaicTools integration: route to pending queue if enabled
-                    if (_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                    // Route to pending queue if pipe connected, otherwise direct add
+                    if (IsPipeConnected)
                     {
                         AddToPendingQueue(record, completed.Accession);
                     }
                     else
                     {
-                        // Direct add to database (original behavior)
+                        // Direct add to database (no MosaicTools pipe)
                         try
                         {
                             _dataManager.Database.AddRecord(shift.Id, record);
@@ -2342,8 +2335,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             if (completed.Duration > 0)
                                 _fatigueDetector.RecordStudy(DateTime.Now, completed.Duration);
 
-                            if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
-                                StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
+                            StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
                             Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU), Duration: {Duration:F1}s",
                                 completed.Accession, studyType, rvu, completed.Duration);
 
@@ -2357,8 +2349,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
-                    // No active shift - route through pending queue if MosaicTools enabled
-                    if (_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                    // No active shift - route through pending queue if pipe connected
+                    if (IsPipeConnected)
                     {
                         AddToPendingQueue(record, completed.Accession);
                     }
@@ -2564,20 +2556,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     continue;
                 }
 
-                // MosaicTools integration: route to pending queue if enabled
-                if (_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                // Route to pending queue if pipe connected, otherwise direct add
+                if (IsPipeConnected)
                 {
                     AddToPendingQueue(record, completed.Accession);
                 }
                 else
                 {
-                    // Direct add to database (original behavior)
+                    // Direct add to database (no MosaicTools pipe)
                     try
                     {
                         _dataManager.Database.AddRecord(shift.Id, record);
                         _studyTracker.MarkSeen(completed.Accession);
-                        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
-                            StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
+                        StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
                         Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU)",
                             completed.Accession, studyType, rvu);
 
@@ -2591,8 +2582,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else
             {
-                // No active shift - route through pending queue if MosaicTools enabled
-                if (_dataManager.Settings.MosaicToolsIntegrationEnabled)
+                // No active shift - route through pending queue if pipe connected
+                if (IsPipeConnected)
                 {
                     AddToPendingQueue(record, completed.Accession);
                 }
@@ -3242,9 +3233,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Log.Information("MosaicTools received SIGNED{Critical} message for: {Accession}",
             hasCritical ? " (CRITICAL)" : "", accession);
 
-        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+        if (!IsPipeConnected)
         {
-            SetTransientStatus($"✅ Signed (off){criticalIndicator}");
+            SetTransientStatus($"✅ Signed (no pipe){criticalIndicator}");
             return;
         }
 
@@ -3320,9 +3311,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Log.Information("MosaicTools received UNSIGNED{Critical} message for: {Accession}",
             hasCritical ? " (CRITICAL)" : "", accession);
 
-        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+        if (!IsPipeConnected)
         {
-            SetTransientStatus("❌ Unsigned (off)");
+            SetTransientStatus("❌ Unsigned (no pipe)");
             return;
         }
 
@@ -3626,7 +3617,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         StatusMessage = message;
 
-        if (!_dataManager.Settings.MosaicToolsIntegrationEnabled)
+        if (!IsPipeConnected)
             return;
 
         _statusRevertCts?.Cancel();
