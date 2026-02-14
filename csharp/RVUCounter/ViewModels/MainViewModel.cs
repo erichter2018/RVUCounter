@@ -1560,7 +1560,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 description = $"vs {compareShift.ShiftStart:ddd M/d}";
                 compareLabel = PaceComparisonMode switch
                 {
-                    "best_week" => "Best:",
+                    "best_week" => "Week:",
                     "best_ever" => "Best:",
                     _ => "Prior:"
                 };
