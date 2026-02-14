@@ -42,8 +42,11 @@ public class UserSettings
     public bool ShowLastHour { get; set; } = true;
     public bool ShowLastFullHour { get; set; } = true;
     public bool ShowProjected { get; set; } = true;
+    public bool ShowProjectedMonth { get; set; } = false;
+    public bool UseMonthlyProjectionForProjectedHour { get; set; } = false;
     public bool ShowProjectedShift { get; set; } = true;
     public bool ShowPaceCar { get; set; } = true;  // Python default: true
+    public List<string>? MainStatsOrder { get; set; }
 
     // Compensation visibility toggles (Python parity)
     public bool ShowCompTotal { get; set; } = false;
@@ -51,6 +54,7 @@ public class UserSettings
     public bool ShowCompLastHour { get; set; } = false;
     public bool ShowCompLastFullHour { get; set; } = false;
     public bool ShowCompProjected { get; set; } = false;
+    public bool ShowCompProjectedMonth { get; set; } = false;
     public bool ShowCompProjectedShift { get; set; } = true;
 
     // Compensation rates

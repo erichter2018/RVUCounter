@@ -11,6 +11,7 @@ using RVUCounter.Services;
 using RVUCounter.Views;
 using Serilog;
 using System.Windows.Media;
+using System.Windows.Input;
 
 namespace RVUCounter.ViewModels;
 
@@ -21,6 +22,17 @@ namespace RVUCounter.ViewModels;
 /// </summary>
 public partial class MainViewModel : ObservableObject, IDisposable
 {
+    private static readonly string[] DefaultMainStatsOrder =
+    {
+        "total",
+        "avg",
+        "last_hour",
+        "last_full_hour",
+        "projected_hour",
+        "projected_month",
+        "projected_shift_total"
+    };
+
     private readonly DataManager _dataManager;
     private readonly StudyTracker _studyTracker;
     private readonly FatigueDetector _fatigueDetector;
@@ -100,6 +112,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private double _projectedCompensation;
 
     [ObservableProperty]
+    private double _projectedMonthlyRvu;
+
+    [ObservableProperty]
+    private double _projectedMonthlyCompensation;
+
+    [ObservableProperty]
     private double _projectedShiftCompensation;
 
     [ObservableProperty]
@@ -125,6 +143,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _showProjected = true;
 
     [ObservableProperty]
+    private bool _showProjectedMonth;
+
+    [ObservableProperty]
     private bool _showProjectedShift = true;
 
     [ObservableProperty]
@@ -147,7 +168,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _showCompProjected = false;
 
     [ObservableProperty]
+    private bool _showCompProjectedMonth = false;
+
+    [ObservableProperty]
     private bool _showCompProjectedShift = true;
+
+    [ObservableProperty]
+    private ObservableCollection<MainStatDisplayRow> _orderedStatRows = new();
 
     // Dark mode
     [ObservableProperty]
@@ -947,6 +974,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowLastHour = _dataManager.Settings.ShowLastHour;
         ShowLastFullHour = _dataManager.Settings.ShowLastFullHour;
         ShowProjected = _dataManager.Settings.ShowProjected;
+        ShowProjectedMonth = _dataManager.Settings.ShowProjectedMonth;
         ShowProjectedShift = _dataManager.Settings.ShowProjectedShift;
         ShowPaceCar = _dataManager.Settings.ShowPaceCar;
         PaceComparisonMode = _dataManager.Settings.PaceComparisonMode;
@@ -957,6 +985,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowCompLastHour = _dataManager.Settings.ShowCompLastHour;
         ShowCompLastFullHour = _dataManager.Settings.ShowCompLastFullHour;
         ShowCompProjected = _dataManager.Settings.ShowCompProjected;
+        ShowCompProjectedMonth = _dataManager.Settings.ShowCompProjectedMonth;
         ShowCompProjectedShift = _dataManager.Settings.ShowCompProjectedShift;
 
         // Theme preset (load custom themes first, then apply)
@@ -1024,6 +1053,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             InitializeTeamDashboard();
         }
 
+        RebuildOrderedStatRows();
         Log.Information("MainViewModel initialized");
     }
 
@@ -1214,6 +1244,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowLastHour = settings.ShowLastHour;
         ShowLastFullHour = settings.ShowLastFullHour;
         ShowProjected = settings.ShowProjected;
+        ShowProjectedMonth = settings.ShowProjectedMonth;
         ShowProjectedShift = settings.ShowProjectedShift;
         ShowPaceCar = settings.ShowPaceCar;
 
@@ -1223,6 +1254,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowCompLastHour = settings.ShowCompLastHour;
         ShowCompLastFullHour = settings.ShowCompLastFullHour;
         ShowCompProjected = settings.ShowCompProjected;
+        ShowCompProjectedMonth = settings.ShowCompProjectedMonth;
         ShowCompProjectedShift = settings.ShowCompProjectedShift;
 
         // Theme
@@ -1243,6 +1275,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (IsShiftActive)
         {
             CalculateAndUpdateStats();
+        }
+        else if (ShowProjectedMonth || ShowCompProjectedMonth)
+        {
+            UpdateMonthlyProjectionStats();
         }
 
         // Update status based on pipe connection
@@ -1289,6 +1325,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         Log.Information("Display settings refreshed from UserSettings");
+        RebuildOrderedStatRows();
     }
 
     private void ResetStats()
@@ -1309,6 +1346,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LastFullHourCompensation = 0;
         ProjectedCompensation = 0;
         ProjectedShiftCompensation = 0;
+        ProjectedMonthlyRvu = 0;
+        ProjectedMonthlyCompensation = 0;
+
+        if (ShowProjectedMonth || ShowCompProjectedMonth)
+        {
+            UpdateMonthlyProjectionStats();
+        }
+
+        RebuildOrderedStatRows();
     }
 
     /// <summary>
@@ -1448,6 +1494,145 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // Send shift info to MosaicTools via pipe (if connected and values changed)
         SendShiftInfoToPipe();
+
+        if (ShowProjectedMonth || ShowCompProjectedMonth)
+        {
+            UpdateMonthlyProjectionStats();
+        }
+
+        RebuildOrderedStatRows();
+    }
+
+    private static List<string> ResolveMainStatOrder(IEnumerable<string>? savedOrder)
+    {
+        var resolved = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (savedOrder != null)
+        {
+            foreach (var key in savedOrder)
+            {
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                if (!DefaultMainStatsOrder.Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
+                if (seen.Add(key)) resolved.Add(key);
+            }
+        }
+
+        foreach (var key in DefaultMainStatsOrder)
+        {
+            if (seen.Add(key)) resolved.Add(key);
+        }
+
+        return resolved;
+    }
+
+    private void RebuildOrderedStatRows()
+    {
+        var rowsByKey = new Dictionary<string, MainStatDisplayRow>(StringComparer.OrdinalIgnoreCase);
+
+        if (ShowTotal)
+        {
+            rowsByKey["total"] = new MainStatDisplayRow
+            {
+                Key = "total",
+                Label = "total wRVU:",
+                Value = $"{TotalRvu:F1}",
+                Compensation = $"(${TotalCompensation:N0})",
+                ShowCompensation = ShowCompTotal
+            };
+        }
+
+        if (ShowAvg)
+        {
+            rowsByKey["avg"] = new MainStatDisplayRow
+            {
+                Key = "avg",
+                Label = "avg/hour:",
+                Value = $"{AvgPerHour:F1}",
+                Compensation = $"(${AvgCompensationPerHour:N0})",
+                ShowCompensation = ShowCompAvg
+            };
+        }
+
+        if (ShowLastHour)
+        {
+            rowsByKey["last_hour"] = new MainStatDisplayRow
+            {
+                Key = "last_hour",
+                Label = "last hour:",
+                Value = $"{LastHourRvu:F1}",
+                Compensation = $"(${LastHourCompensation:N0})",
+                ShowCompensation = ShowCompLastHour
+            };
+        }
+
+        if (ShowLastFullHour)
+        {
+            var label = string.IsNullOrWhiteSpace(LastFullHourRange)
+                ? "last full hour:"
+                : $"{LastFullHourRange} hour:";
+
+            rowsByKey["last_full_hour"] = new MainStatDisplayRow
+            {
+                Key = "last_full_hour",
+                Label = label,
+                Value = $"{LastFullHourRvu:F1}",
+                Compensation = $"(${LastFullHourCompensation:N0})",
+                ShowCompensation = ShowCompLastFullHour
+            };
+        }
+
+        if (ShowProjected)
+        {
+            rowsByKey["projected_hour"] = new MainStatDisplayRow
+            {
+                Key = "projected_hour",
+                Label = "est this hour:",
+                Value = $"{ProjectedThisHour:F1}",
+                Compensation = $"(${ProjectedCompensation:N0})",
+                ShowCompensation = ShowCompProjected
+            };
+        }
+
+        if (ShowProjectedMonth)
+        {
+            rowsByKey["projected_month"] = new MainStatDisplayRow
+            {
+                Key = "projected_month",
+                Label = "est this month:",
+                Value = $"{ProjectedMonthlyRvu:N0}",
+                Compensation = $"(${ProjectedMonthlyCompensation:N0})",
+                ShowCompensation = ShowCompProjectedMonth,
+                IsClickable = true,
+                ClickCommand = EditMonthlyProjectionCommand,
+                ToolTip = "Click to edit monthly target shifts and extra hours"
+            };
+        }
+
+        if (ShowProjectedShift)
+        {
+            rowsByKey["projected_shift_total"] = new MainStatDisplayRow
+            {
+                Key = "projected_shift_total",
+                Label = "est shift total:",
+                Value = $"{ProjectedShiftTotal:F1}",
+                Compensation = $"(${ProjectedShiftCompensation:N0})",
+                ShowCompensation = ShowCompProjectedShift,
+                UseAccentValueColor = true
+            };
+        }
+
+        var ordered = new List<MainStatDisplayRow>();
+        var order = ResolveMainStatOrder(_dataManager.Settings.MainStatsOrder);
+        foreach (var key in order)
+        {
+            if (rowsByKey.TryGetValue(key, out var row))
+            {
+                ordered.Add(row);
+            }
+        }
+
+        OrderedStatRows = new ObservableCollection<MainStatDisplayRow>(ordered);
     }
 
     private string FormatHourLabel(DateTime dt)
@@ -1457,6 +1642,87 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (hour12 == 0) hour12 = 12;
         var amPm = hour < 12 ? "am" : "pm";
         return $"{hour12}{amPm}";
+    }
+
+    private void UpdateMonthlyProjectionStats()
+    {
+        try
+        {
+            var role = _dataManager.Settings.Role ?? "Partner";
+            var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            var monthEnd = monthStart.AddMonths(1);
+
+            var allRecords = _dataManager.Database.GetAllRecords();
+            var currentMonthRecords = allRecords
+                .Where(r => r.Timestamp >= monthStart && r.Timestamp < monthEnd)
+                .ToList();
+
+            var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
+            var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
+            var actualMonthHours = CalculateMergedHours(currentMonthRecords);
+
+            CheckAndResetMonthlyProjections();
+            var targetShifts = _dataManager.Settings.ProjectionDays;
+            var extraHours = _dataManager.Settings.ProjectionExtraHours;
+            var targetMonthlyHours = (targetShifts * _dataManager.Settings.ShiftLengthHours) + extraHours;
+            var remainingHours = Math.Max(0, targetMonthlyHours - actualMonthHours);
+
+            // Fallback matches Statistics behavior: use current period pace when month has no data.
+            var fallbackHours = _shiftStart.HasValue ? Math.Max((DateTime.Now - _shiftStart.Value).TotalHours, 0) : 0;
+            var compPerHour = actualMonthHours > 0 ? actualMonthComp / actualMonthHours : (fallbackHours > 0 ? TotalCompensation / fallbackHours : 0);
+            var rvuPerHour = actualMonthHours > 0 ? actualMonthRvu / actualMonthHours : (fallbackHours > 0 ? TotalRvu / fallbackHours : 0);
+
+            var projectedRemainingComp = compPerHour * remainingHours;
+            var projectedRemainingRvu = rvuPerHour * remainingHours;
+
+            ProjectedMonthlyCompensation = actualMonthComp + projectedRemainingComp;
+            ProjectedMonthlyRvu = actualMonthRvu + projectedRemainingRvu;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error calculating monthly projection stats");
+            ProjectedMonthlyCompensation = 0;
+            ProjectedMonthlyRvu = 0;
+        }
+        finally
+        {
+            RebuildOrderedStatRows();
+        }
+    }
+
+    private void CheckAndResetMonthlyProjections()
+    {
+        var currentMonth = DateTime.Now.ToString("yyyy-MM");
+        if (_dataManager.Settings.LastProjectionMonth != currentMonth)
+        {
+            _dataManager.Settings.ProjectionDays = 14;
+            _dataManager.Settings.ProjectionExtraHours = 0;
+            _dataManager.Settings.LastProjectionMonth = currentMonth;
+            _dataManager.SaveSettings();
+        }
+    }
+
+    private static double CalculateMergedHours(List<StudyRecord> records)
+    {
+        if (!records.Any()) return 0;
+        var intervals = records
+            .GroupBy(r => r.ShiftId)
+            .Select(g =>
+            {
+                var times = g.Select(r => r.TimeFinished ?? r.Timestamp).ToList();
+                return (Start: times.Min(), End: times.Max());
+            })
+            .OrderBy(i => i.Start)
+            .ToList();
+        var merged = new List<(DateTime Start, DateTime End)>();
+        foreach (var interval in intervals)
+        {
+            if (merged.Count > 0 && interval.Start <= merged[^1].End)
+                merged[^1] = (merged[^1].Start, interval.End > merged[^1].End ? interval.End : merged[^1].End);
+            else
+                merged.Add(interval);
+        }
+        return Math.Max(merged.Sum(i => Math.Max((i.End - i.Start).TotalHours, 1)), 1);
     }
 
     private void UpdatePaceCar(double hoursElapsed)
@@ -2975,6 +3241,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private void EditMonthlyProjection()
+    {
+        CheckAndResetMonthlyProjections();
+
+        var dialog = new MonthlyProjectionDialog(_dataManager)
+        {
+            Owner = Application.Current.MainWindow
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            if (IsShiftActive)
+            {
+                CalculateAndUpdateStats();
+            }
+            else
+            {
+                UpdateMonthlyProjectionStats();
+            }
+        }
+    }
+
+    [RelayCommand]
     private void OpenTools()
     {
         var toolsWindow = new Views.ToolsWindow(_dataManager, () => 
@@ -3630,6 +3919,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Application.Current?.Dispatcher?.Invoke(() => StatusMessage = "🔗 MT: Listening");
         }, TaskContinuationOptions.OnlyOnRanToCompletion);
     }
+}
+
+public class MainStatDisplayRow
+{
+    public string Key { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string Value { get; set; } = "";
+    public string Compensation { get; set; } = "";
+    public bool ShowCompensation { get; set; }
+    public bool UseAccentValueColor { get; set; }
+    public bool IsClickable { get; set; }
+    public string? ToolTip { get; set; }
+    public ICommand? ClickCommand { get; set; }
 }
 
 /// <summary>

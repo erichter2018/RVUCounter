@@ -1,5 +1,8 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using RVUCounter.Core;
 using RVUCounter.Data;
 using RVUCounter.ViewModels;
@@ -11,6 +14,10 @@ namespace RVUCounter.Views;
 /// </summary>
 public partial class SettingsWindow : Window
 {
+    private Point _dragStartPoint;
+    private int _lastDragOverIndex = -1;
+    private Popup? _dragGhostPopup;
+    private MainStatOrderItem? _draggedStatItem;
     private readonly SettingsViewModel _viewModel;
     private readonly DataManager _dataManager;
     private readonly MainViewModel? _mainViewModel;
@@ -166,6 +173,156 @@ public partial class SettingsWindow : Window
             Serilog.Log.Error(ex, "Dropbox authorization failed");
             MessageBox.Show($"Authorization failed: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void DisplayOrderList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+        _lastDragOverIndex = -1;
+    }
+
+    private void DisplayOrderList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+        if (sender is not System.Windows.Controls.ListBox listBox) return;
+
+        var currentPos = e.GetPosition(null);
+        if (Math.Abs(currentPos.X - _dragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(currentPos.Y - _dragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        var listBoxItem = FindAncestor<ListBoxItem>((DependencyObject)e.OriginalSource);
+        if (listBoxItem?.DataContext is not MainStatOrderItem draggedItem) return;
+
+        _draggedStatItem = draggedItem;
+        ShowDragGhost(draggedItem.Label, e.GetPosition(this));
+        DragDrop.DoDragDrop(listBoxItem, draggedItem, System.Windows.DragDropEffects.Move);
+        HideDragGhost();
+        _draggedStatItem = null;
+        _lastDragOverIndex = -1;
+    }
+
+    private void DisplayOrderList_DragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(MainStatOrderItem))) return;
+        if (sender is not System.Windows.Controls.ListBox listBox) return;
+        UpdateDragGhostPosition(e.GetPosition(this));
+
+        var sourceItem = (MainStatOrderItem)e.Data.GetData(typeof(MainStatOrderItem))!;
+        var targetListBoxItem = FindAncestor<ListBoxItem>((DependencyObject)e.OriginalSource);
+        var targetItem = targetListBoxItem?.DataContext as MainStatOrderItem;
+        if (targetItem == null || ReferenceEquals(sourceItem, targetItem))
+        {
+            e.Effects = System.Windows.DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
+
+        var oldIndex = _viewModel.MainStatOrderItems.IndexOf(sourceItem);
+        var newIndex = _viewModel.MainStatOrderItems.IndexOf(targetItem);
+        if (oldIndex < 0 || newIndex < 0 || oldIndex == newIndex)
+        {
+            e.Effects = System.Windows.DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
+
+        if (newIndex != _lastDragOverIndex)
+        {
+            _viewModel.MainStatOrderItems.Move(oldIndex, newIndex);
+            _viewModel.NotifyMainStatOrderChanged();
+            _lastDragOverIndex = newIndex;
+        }
+
+        e.Effects = System.Windows.DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void DisplayOrderList_Drop(object sender, System.Windows.DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(MainStatOrderItem))) return;
+        if (sender is not System.Windows.Controls.ListBox listBox) return;
+
+        var sourceItem = (MainStatOrderItem)e.Data.GetData(typeof(MainStatOrderItem))!;
+        var targetListBoxItem = FindAncestor<ListBoxItem>((DependencyObject)e.OriginalSource);
+        var targetItem = targetListBoxItem?.DataContext as MainStatOrderItem;
+        if (targetItem == null || ReferenceEquals(sourceItem, targetItem)) return;
+
+        var oldIndex = _viewModel.MainStatOrderItems.IndexOf(sourceItem);
+        var newIndex = _viewModel.MainStatOrderItems.IndexOf(targetItem);
+        if (oldIndex < 0 || newIndex < 0 || oldIndex == newIndex) return;
+
+        _viewModel.MainStatOrderItems.Move(oldIndex, newIndex);
+        _viewModel.NotifyMainStatOrderChanged();
+        listBox.SelectedItem = sourceItem;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current != null)
+        {
+            if (current is T found)
+                return found;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private void ShowDragGhost(string label, Point position)
+    {
+        if (_dragGhostPopup == null)
+        {
+            var text = new TextBlock
+            {
+                Name = "DragGhostText",
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White
+            };
+
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(220, 30, 136, 229)),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(10, 5, 10, 5),
+                Child = text
+            };
+
+            _dragGhostPopup = new Popup
+            {
+                AllowsTransparency = true,
+                Placement = PlacementMode.Relative,
+                PlacementTarget = this,
+                StaysOpen = true,
+                IsHitTestVisible = false,
+                Child = border
+            };
+        }
+
+        if (_dragGhostPopup.Child is Border b && b.Child is TextBlock t)
+        {
+            t.Text = $"Moving: {label}";
+        }
+
+        UpdateDragGhostPosition(position);
+        _dragGhostPopup.IsOpen = true;
+    }
+
+    private void UpdateDragGhostPosition(Point position)
+    {
+        if (_dragGhostPopup == null) return;
+        _dragGhostPopup.HorizontalOffset = position.X + 14;
+        _dragGhostPopup.VerticalOffset = position.Y + 10;
+    }
+
+    private void HideDragGhost()
+    {
+        if (_dragGhostPopup != null)
+        {
+            _dragGhostPopup.IsOpen = false;
         }
     }
 

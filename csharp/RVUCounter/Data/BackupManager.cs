@@ -302,6 +302,7 @@ public class BackupManager
             var remotePath = $"/Backups/RVU_Backup_{timestamp}#.db";
 
             var httpClient = _httpClient;
+            httpClient.DefaultRequestHeaders.Remove("Authorization");
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
             httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
                 JsonSerializer.Serialize(new { path = remotePath, mode = "overwrite" }));
@@ -424,6 +425,7 @@ public class BackupManager
         try
         {
             var httpClient = _httpClient;
+            httpClient.DefaultRequestHeaders.Remove("Authorization");
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var backupFiles = new List<(string Path, string Name, long Size)>();
@@ -913,6 +915,7 @@ public class BackupManager
             }
 
             var httpClient = _httpClient;
+            httpClient.DefaultRequestHeaders.Remove("Authorization");
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var deleteContent = new StringContent(
@@ -968,6 +971,7 @@ public class BackupManager
             }
 
             var httpClient = _httpClient;
+            httpClient.DefaultRequestHeaders.Remove("Authorization");
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
             var listContent = new StringContent(
@@ -1057,6 +1061,7 @@ public class BackupManager
 
             // Download file from Dropbox
             var httpClient = _httpClient;
+            httpClient.DefaultRequestHeaders.Remove("Authorization");
             httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
             httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
                 JsonSerializer.Serialize(new { path = remotePath }));

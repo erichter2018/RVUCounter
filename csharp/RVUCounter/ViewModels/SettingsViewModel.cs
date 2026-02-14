@@ -17,6 +17,28 @@ namespace RVUCounter.ViewModels;
 /// </summary>
 public partial class SettingsViewModel : ObservableObject
 {
+    private static readonly string[] DefaultMainStatsOrder =
+    {
+        "total",
+        "avg",
+        "last_hour",
+        "last_full_hour",
+        "projected_hour",
+        "projected_month",
+        "projected_shift_total"
+    };
+
+    private static readonly Dictionary<string, (string label, string help)> MainStatOrderMetadata = new()
+    {
+        ["total"] = ("Total wRVU", "Current shift total RVU."),
+        ["avg"] = ("Average per hour", "Shift RVU pace based on elapsed hours."),
+        ["last_hour"] = ("Last hour", "Rolling last 60 minutes."),
+        ["last_full_hour"] = ("Last full hour", "Previous complete clock hour."),
+        ["projected_hour"] = ("Est. this hour", "Projected RVU for current hour."),
+        ["projected_month"] = ("Est. this month", "Projected monthly RVU/income."),
+        ["projected_shift_total"] = ("Est. shift total", "Projected end-of-shift total.")
+    };
+
     private readonly DataManager _dataManager;
     private double _originalFontSizeAdjustment;
     private BackupManager? _backupManager;
@@ -159,6 +181,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool _showProjected;
 
     [ObservableProperty]
+    private bool _showProjectedMonth;
+
+    [ObservableProperty]
     private bool _showProjectedShift;
 
     [ObservableProperty]
@@ -166,6 +191,8 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _showInpatientStatPercentage;
+
+    public ObservableCollection<MainStatOrderItem> MainStatOrderItems { get; } = new();
 
     // ===========================================
     // COMPENSATION VISIBILITY TOGGLES
@@ -185,6 +212,9 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _showCompProjected;
+
+    [ObservableProperty]
+    private bool _showCompProjectedMonth;
 
     [ObservableProperty]
     private bool _showCompProjectedShift;
@@ -417,6 +447,149 @@ public partial class SettingsViewModel : ObservableObject
         ThemePreset = "default_dark";
 
         Log.Information("Deleted custom theme: {Key}", deletedKey);
+    }
+
+    [RelayCommand]
+    private void MoveMainStatUp(MainStatOrderItem? item)
+    {
+        if (item == null) return;
+        var index = MainStatOrderItems.IndexOf(item);
+        if (index <= 0) return;
+        MainStatOrderItems.Move(index, index - 1);
+        RefreshMainStatOrderPositions();
+    }
+
+    [RelayCommand]
+    private void MoveMainStatDown(MainStatOrderItem? item)
+    {
+        if (item == null) return;
+        var index = MainStatOrderItems.IndexOf(item);
+        if (index < 0 || index >= MainStatOrderItems.Count - 1) return;
+        MainStatOrderItems.Move(index, index + 1);
+        RefreshMainStatOrderPositions();
+    }
+
+    [RelayCommand]
+    private void ResetMainStatOrder()
+    {
+        LoadMainStatOrder(DefaultMainStatsOrder);
+    }
+
+    private void LoadMainStatOrder(IEnumerable<string>? savedOrder)
+    {
+        var order = ResolveMainStatOrder(savedOrder);
+        MainStatOrderItems.Clear();
+        var position = 1;
+        foreach (var key in order)
+        {
+            var (label, help) = MainStatOrderMetadata.TryGetValue(key, out var meta)
+                ? meta
+                : (key, "");
+            MainStatOrderItems.Add(new MainStatOrderItem
+            {
+                Key = key,
+                Label = label,
+                HelpText = help,
+                ShowCounter = GetCounterVisibilityByKey(key),
+                ShowCompensation = GetCompVisibilityByKey(key),
+                Position = position++
+            });
+        }
+    }
+
+    private static List<string> ResolveMainStatOrder(IEnumerable<string>? savedOrder)
+    {
+        var resolved = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (savedOrder != null)
+        {
+            foreach (var key in savedOrder)
+            {
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                if (!MainStatOrderMetadata.ContainsKey(key)) continue;
+                if (seen.Add(key)) resolved.Add(key);
+            }
+        }
+
+        foreach (var key in DefaultMainStatsOrder)
+        {
+            if (seen.Add(key)) resolved.Add(key);
+        }
+
+        return resolved;
+    }
+
+    private void RefreshMainStatOrderPositions()
+    {
+        for (var i = 0; i < MainStatOrderItems.Count; i++)
+        {
+            MainStatOrderItems[i].Position = i + 1;
+        }
+    }
+
+    public void NotifyMainStatOrderChanged() => RefreshMainStatOrderPositions();
+
+    private bool GetCounterVisibilityByKey(string key) => key switch
+    {
+        "total" => ShowTotal,
+        "avg" => ShowAvg,
+        "last_hour" => ShowLastHour,
+        "last_full_hour" => ShowLastFullHour,
+        "projected_hour" => ShowProjected,
+        "projected_month" => ShowProjectedMonth,
+        "projected_shift_total" => ShowProjectedShift,
+        _ => true
+    };
+
+    private bool GetCompVisibilityByKey(string key) => key switch
+    {
+        "total" => ShowCompTotal,
+        "avg" => ShowCompAvg,
+        "last_hour" => ShowCompLastHour,
+        "last_full_hour" => ShowCompLastFullHour,
+        "projected_hour" => ShowCompProjected,
+        "projected_month" => ShowCompProjectedMonth,
+        "projected_shift_total" => ShowCompProjectedShift,
+        _ => false
+    };
+
+    private void SyncDisplayPropertiesFromOrderItems()
+    {
+        foreach (var item in MainStatOrderItems)
+        {
+            switch (item.Key)
+            {
+                case "total":
+                    ShowTotal = item.ShowCounter;
+                    ShowCompTotal = item.ShowCompensation;
+                    break;
+                case "avg":
+                    ShowAvg = item.ShowCounter;
+                    ShowCompAvg = item.ShowCompensation;
+                    break;
+                case "last_hour":
+                    ShowLastHour = item.ShowCounter;
+                    ShowCompLastHour = item.ShowCompensation;
+                    break;
+                case "last_full_hour":
+                    ShowLastFullHour = item.ShowCounter;
+                    ShowCompLastFullHour = item.ShowCompensation;
+                    break;
+                case "projected_hour":
+                    ShowProjected = item.ShowCounter;
+                    ShowCompProjected = item.ShowCompensation;
+                    break;
+                case "projected_month":
+                    ShowProjectedMonth = item.ShowCounter;
+                    ShowCompProjectedMonth = item.ShowCompensation;
+                    break;
+                case "projected_shift_total":
+                    ShowProjectedShift = item.ShowCounter;
+                    ShowCompProjectedShift = item.ShowCompensation;
+                    break;
+            }
+        }
     }
 
     /// <summary>
@@ -1086,9 +1259,11 @@ public partial class SettingsViewModel : ObservableObject
         ShowLastHour = settings.ShowLastHour;
         ShowLastFullHour = settings.ShowLastFullHour;
         ShowProjected = settings.ShowProjected;
+        ShowProjectedMonth = settings.ShowProjectedMonth;
         ShowProjectedShift = settings.ShowProjectedShift;
         ShowPaceCar = settings.ShowPaceCar;
         ShowInpatientStatPercentage = settings.ShowInpatientStatPercentage;
+        LoadMainStatOrder(settings.MainStatsOrder);
 
         // Compensation visibility
         ShowCompTotal = settings.ShowCompTotal;
@@ -1096,6 +1271,7 @@ public partial class SettingsViewModel : ObservableObject
         ShowCompLastHour = settings.ShowCompLastHour;
         ShowCompLastFullHour = settings.ShowCompLastFullHour;
         ShowCompProjected = settings.ShowCompProjected;
+        ShowCompProjectedMonth = settings.ShowCompProjectedMonth;
         ShowCompProjectedShift = settings.ShowCompProjectedShift;
 
         // Compensation rates
@@ -1124,6 +1300,7 @@ public partial class SettingsViewModel : ObservableObject
     public void Save()
     {
         var settings = _dataManager.Settings;
+        SyncDisplayPropertiesFromOrderItems();
 
         // Appearance / Theme
         settings.ThemePreset = ThemePreset;
@@ -1157,9 +1334,11 @@ public partial class SettingsViewModel : ObservableObject
         settings.ShowLastHour = ShowLastHour;
         settings.ShowLastFullHour = ShowLastFullHour;
         settings.ShowProjected = ShowProjected;
+        settings.ShowProjectedMonth = ShowProjectedMonth;
         settings.ShowProjectedShift = ShowProjectedShift;
         settings.ShowPaceCar = ShowPaceCar;
         settings.ShowInpatientStatPercentage = ShowInpatientStatPercentage;
+        settings.MainStatsOrder = MainStatOrderItems.Select(i => i.Key).ToList();
 
         // Compensation visibility
         settings.ShowCompTotal = ShowCompTotal;
@@ -1167,6 +1346,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.ShowCompLastHour = ShowCompLastHour;
         settings.ShowCompLastFullHour = ShowCompLastFullHour;
         settings.ShowCompProjected = ShowCompProjected;
+        settings.ShowCompProjectedMonth = ShowCompProjectedMonth;
         settings.ShowCompProjectedShift = ShowCompProjectedShift;
 
         // Compensation rates
@@ -1180,6 +1360,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.GitHubToken = GitHubToken;
         settings.BackupRepoName = BackupRepoName;
         settings.DropboxEnabled = DropboxEnabled;
+        settings.DropboxBackupEnabled = DropboxEnabled;
         settings.DropboxAppKey = DropboxAppKey;
 
         // Mini interface
@@ -1214,4 +1395,31 @@ public partial class ColorOverrideItem : ObservableObject
 
     [ObservableProperty]
     private string _hexColor = "#808080";
+}
+
+public partial class MainStatOrderItem : ObservableObject
+{
+    public string Key { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string HelpText { get; set; } = "";
+
+    [ObservableProperty]
+    private int _position;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanShowCompensation))]
+    private bool _showCounter = true;
+
+    [ObservableProperty]
+    private bool _showCompensation;
+
+    public bool CanShowCompensation => ShowCounter;
+
+    partial void OnShowCounterChanged(bool value)
+    {
+        if (!value)
+        {
+            ShowCompensation = false;
+        }
+    }
 }

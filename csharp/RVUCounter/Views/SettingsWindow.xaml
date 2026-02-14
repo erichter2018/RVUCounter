@@ -396,38 +396,100 @@
             <TabItem Header="Display">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="15">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource SectionHeader}" Text="Display Order"/>
+                        <TextBlock Text="Drag rows to reorder main stats. Compensation follows each row."
+                                   Foreground="{DynamicResource SecondaryTextBrush}" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-                            <!-- Left Column: Show Counters -->
-                            <StackPanel Grid.Column="0" Margin="0,0,15,0">
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="Show Counters"/>
+                        <Border Background="{DynamicResource CardBackgroundBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Style="{StaticResource SectionHeader}" Text="Show Counters"/>
+                                    <TextBlock Grid.Column="1" Style="{StaticResource SectionHeader}" Text="Show Compensation"/>
+                                </Grid>
 
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Total wRVU" IsChecked="{Binding ShowTotal}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Average per hour" IsChecked="{Binding ShowAvg}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Last hour" IsChecked="{Binding ShowLastHour}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Last full hour" IsChecked="{Binding ShowLastFullHour}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. this hour" IsChecked="{Binding ShowProjected}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. shift total" IsChecked="{Binding ShowProjectedShift}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Pace vs prior shift" IsChecked="{Binding ShowPaceCar}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Inpatient Stat %" IsChecked="{Binding ShowInpatientStatPercentage}"/>
+                                <ListBox x:Name="DisplayOrderList"
+                                         ItemsSource="{Binding MainStatOrderItems}"
+                                         AllowDrop="True"
+                                         Background="Transparent"
+                                         BorderThickness="0"
+                                         HorizontalContentAlignment="Stretch"
+                                         ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                         PreviewMouseLeftButtonDown="DisplayOrderList_PreviewMouseLeftButtonDown"
+                                         PreviewMouseMove="DisplayOrderList_PreviewMouseMove"
+                                         DragOver="DisplayOrderList_DragOver"
+                                         Drop="DisplayOrderList_Drop">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="Margin" Value="0,0,0,4"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource PanelBackgroundBrush}"
+                                                    BorderBrush="{DynamicResource BorderBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="4"
+                                                    Padding="8,6">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="28"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="⋮⋮" Margin="0,0,8,0"
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                                               VerticalAlignment="Center"/>
+                                                    <CheckBox Grid.Column="1" Style="{StaticResource CheckItem}"
+                                                              Margin="0"
+                                                              Content="{Binding Label}"
+                                                              IsChecked="{Binding ShowCounter}"/>
+                                                    <CheckBox Grid.Column="2" Style="{StaticResource CheckItem}"
+                                                              Margin="8,0,0,0"
+                                                              HorizontalAlignment="Center"
+                                                              IsChecked="{Binding ShowCompensation}"
+                                                              IsEnabled="{Binding CanShowCompensation}"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <Separator Margin="0,6,0,6" Background="{DynamicResource SeparatorBrush}"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0" Style="{StaticResource CheckItem}" Content="Pace vs prior shift" IsChecked="{Binding ShowPaceCar}"/>
+                                    <Button Grid.Column="1"
+                                            Content="Reset Default Order"
+                                            Padding="10,4"
+                                            Command="{Binding ResetMainStatOrderCommand}"
+                                            Background="{DynamicResource ButtonBackgroundBrush}"
+                                            Foreground="{DynamicResource ButtonTextBrush}"/>
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0" Style="{StaticResource CheckItem}" Content="Inpatient Stat %" IsChecked="{Binding ShowInpatientStatPercentage}"/>
+                                </Grid>
                             </StackPanel>
-
-                            <!-- Right Column: Show Compensation -->
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Style="{StaticResource SectionHeader}" Text="Show Compensation"/>
-
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Total" IsChecked="{Binding ShowCompTotal}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Average per hour" IsChecked="{Binding ShowCompAvg}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Last hour" IsChecked="{Binding ShowCompLastHour}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Last full hour" IsChecked="{Binding ShowCompLastFullHour}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. this hour" IsChecked="{Binding ShowCompProjected}"/>
-                                <CheckBox Style="{StaticResource CheckItem}" Content="Est. shift total" IsChecked="{Binding ShowCompProjectedShift}"/>
-                            </StackPanel>
-                        </Grid>
+                        </Border>
 
                         <Separator Margin="0,15" Background="{DynamicResource SeparatorBrush}"/>
 
