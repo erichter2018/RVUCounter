@@ -17,7 +17,7 @@ public partial class PaceComparisonDialog : Window
     private Shift? _priorShift;
     private Shift? _bestWeekShift;
     private Shift? _bestEverShift;
-    private List<Shift> _thisWeekShifts = new();
+    private Dictionary<int, Shift> _shiftsById = new();
 
     public PaceComparisonDialog(DataManager dataManager, Action<string, Shift?> onSelection, Point position)
     {
@@ -86,14 +86,16 @@ public partial class PaceComparisonDialog : Window
             .OrderByDescending(s => s.ShiftStart)
             .ToList();
 
-        // Populate TotalRvu for each shift
+        var currentShiftId = _dataManager.Database.GetCurrentShift()?.Id;
+
+        // Populate TotalRvu for each shift, exclude current shift
         foreach (var shift in allShifts)
         {
             shift.TotalRvu = _dataManager.Database.GetTotalRvuForShift(shift.Id);
         }
 
-        // Filter to shifts with RVU > 0
-        allShifts = allShifts.Where(s => s.TotalRvu > 0).ToList();
+        // Filter to shifts with RVU > 0, exclude current shift
+        allShifts = allShifts.Where(s => s.TotalRvu > 0 && s.Id != currentShiftId).ToList();
 
         if (allShifts.Count == 0)
         {
@@ -101,17 +103,22 @@ public partial class PaceComparisonDialog : Window
             return;
         }
 
+        // Index shifts by ID for click handler
+        foreach (var shift in allShifts)
+            _shiftsById[shift.Id] = shift;
+
         var now = DateTime.Now;
 
         // Find start of current week (Monday)
         var daysToMonday = ((int)now.DayOfWeek + 6) % 7;
         var weekStart = now.Date.AddDays(-daysToMonday);
-
-        // Typical shift hours: 6 PM to 6 AM (night shift)
-        bool IsValidShiftHour(int hour) => hour >= 18 || hour <= 6;
+        var lastWeekStart = weekStart.AddDays(-7);
 
         double bestWeekRvu = 0;
         double bestEverRvu = 0;
+        var thisWeekShifts = new List<Shift>();
+        var lastWeekShifts = new List<Shift>();
+        var earlierShifts = new List<Shift>();
 
         foreach (var shift in allShifts)
         {
@@ -127,28 +134,33 @@ public partial class PaceComparisonDialog : Window
                 }
             }
 
-            // For prior/week: only include typical shift hours
-            var hour = shift.ShiftStart.Hour;
-            if (!IsValidShiftHour(hour))
-                continue;
-
-            // Prior shift is the first valid one
+            // Prior shift is the most recent one
             _priorShift ??= shift;
 
-            // Check if in this week
+            // Group into week buckets
             if (shift.ShiftStart >= weekStart)
             {
-                _thisWeekShifts.Add(shift);
+                thisWeekShifts.Add(shift);
                 if (shift.TotalRvu > bestWeekRvu)
                 {
                     bestWeekRvu = shift.TotalRvu;
                     _bestWeekShift = shift;
                 }
             }
+            else if (shift.ShiftStart >= lastWeekStart)
+            {
+                lastWeekShifts.Add(shift);
+            }
+            else
+            {
+                earlierShifts.Add(shift);
+            }
         }
 
-        // Reverse this week's shifts to show oldest first
-        _thisWeekShifts.Reverse();
+        // Reverse to show oldest first within each group
+        thisWeekShifts.Reverse();
+        lastWeekShifts.Reverse();
+        earlierShifts.Reverse();
 
         // Show Prior Shift option
         if (_priorShift != null)
@@ -174,36 +186,51 @@ public partial class PaceComparisonDialog : Window
             BestEverOption.Visibility = Visibility.Visible;
         }
 
-        // Show This Week shifts
-        if (_thisWeekShifts.Count > 0)
+        // Add shift sections (cap total to keep dialog compact)
+        AddShiftSection("This Week:", thisWeekShifts);
+        AddShiftSection("Last Week:", lastWeekShifts, maxCount: 7);
+        AddShiftSection("Earlier:", earlierShifts, maxCount: 4);
+    }
+
+    private void AddShiftSection(string header, List<Shift> shifts, int maxCount = int.MaxValue)
+    {
+        if (shifts.Count == 0) return;
+
+        var headerText = new TextBlock
         {
-            ThisWeekHeader.Visibility = Visibility.Visible;
+            Text = header,
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (TryFindResource("PrimaryTextBrush") as Brush) ?? Brushes.Black,
+            Margin = new Thickness(4, 10, 0, 4)
+        };
+        ShiftSectionsPanel.Children.Add(headerText);
 
-            for (int i = 0; i < _thisWeekShifts.Count; i++)
+        var count = Math.Min(shifts.Count, maxCount);
+        for (int i = 0; i < count; i++)
+        {
+            var shift = shifts[i];
+            var border = new Border
             {
-                var shift = _thisWeekShifts[i];
-                var border = new Border
-                {
-                    Tag = $"week_{i}",
-                    Background = Brushes.Transparent,
-                    Cursor = Cursors.Hand,
-                    Padding = new Thickness(4, 3, 4, 3)
-                };
+                Tag = $"shift_{shift.Id}",
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                Padding = new Thickness(4, 3, 4, 3)
+            };
 
-                var text = new TextBlock
-                {
-                    Text = $"  {FormatShiftLabel(shift)} ({shift.TotalRvu:F1} RVU)",
-                    FontSize = 11,
-                    Foreground = (TryFindResource("PrimaryTextBrush") as Brush) ?? Brushes.Black
-                };
+            var text = new TextBlock
+            {
+                Text = $"  {FormatShiftLabel(shift)} ({shift.TotalRvu:F1} RVU)",
+                FontSize = 11,
+                Foreground = (TryFindResource("PrimaryTextBrush") as Brush) ?? Brushes.Black
+            };
 
-                border.Child = text;
-                border.MouseLeftButtonUp += ThisWeekOption_Click;
-                border.MouseEnter += Option_MouseEnter;
-                border.MouseLeave += Option_MouseLeave;
+            border.Child = text;
+            border.MouseLeftButtonUp += ShiftOption_Click;
+            border.MouseEnter += Option_MouseEnter;
+            border.MouseLeave += Option_MouseLeave;
 
-                ThisWeekShifts.Children.Add(border);
-            }
+            ShiftSectionsPanel.Children.Add(border);
         }
     }
 
@@ -313,23 +340,23 @@ public partial class PaceComparisonDialog : Window
         }
     }
 
-    private void ThisWeekOption_Click(object sender, MouseButtonEventArgs e)
+    private void ShiftOption_Click(object sender, MouseButtonEventArgs e)
     {
         if (_isClosing) return;
 
         if (sender is Border border && border.Tag is string mode)
         {
-            // Parse week index from mode (e.g., "week_0" -> 0)
-            if (mode.StartsWith("week_") && int.TryParse(mode[5..], out var idx) && idx < _thisWeekShifts.Count)
+            // Parse shift ID from mode (e.g., "shift_42" -> 42)
+            if (mode.StartsWith("shift_") && int.TryParse(mode[6..], out var id) && _shiftsById.TryGetValue(id, out var shift))
             {
                 _isClosing = true;
                 try
                 {
-                    _onSelection(mode, _thisWeekShifts[idx]);
+                    _onSelection(mode, shift);
                 }
                 catch (Exception ex)
                 {
-                    Serilog.Log.Error(ex, "Error in ThisWeekOption_Click for mode {Mode}", mode);
+                    Serilog.Log.Error(ex, "Error in ShiftOption_Click for mode {Mode}", mode);
                 }
                 finally
                 {

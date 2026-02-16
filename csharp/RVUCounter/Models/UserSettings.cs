@@ -45,6 +45,7 @@ public class UserSettings
     public bool ShowProjectedMonth { get; set; } = false;
     public bool UseMonthlyProjectionForProjectedHour { get; set; } = false;
     public bool ShowProjectedShift { get; set; } = true;
+    public bool ShowRvuPerStudy { get; set; } = false;
     public bool ShowPaceCar { get; set; } = true;  // Python default: true
     public List<string>? MainStatsOrder { get; set; }
 

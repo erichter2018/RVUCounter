@@ -26,6 +26,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         "total",
         "avg",
+        "rvu_per_study",
         "last_hour",
         "last_full_hour",
         "projected_hour",
@@ -52,6 +53,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private double _lastSentCurrentHourRvu = -1;
     private double _lastSentPriorHourRvu = -1;
     private double _lastSentEstimatedTotalRvu = -1;
+    private double _lastSentPaceDiff = double.NaN;
+    private double _lastSentPaceTargetRvu = -1;
 
     /// <summary>
     /// Exposes DataManager for dialogs that need access to settings/database
@@ -147,6 +150,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _showProjectedShift = true;
+
+    [ObservableProperty]
+    private bool _showRvuPerStudy;
 
     [ObservableProperty]
     private bool _showPaceCar = false;
@@ -976,6 +982,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowProjected = _dataManager.Settings.ShowProjected;
         ShowProjectedMonth = _dataManager.Settings.ShowProjectedMonth;
         ShowProjectedShift = _dataManager.Settings.ShowProjectedShift;
+        ShowRvuPerStudy = _dataManager.Settings.ShowRvuPerStudy;
         ShowPaceCar = _dataManager.Settings.ShowPaceCar;
         PaceComparisonMode = _dataManager.Settings.PaceComparisonMode;
 
@@ -1246,6 +1253,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ShowProjected = settings.ShowProjected;
         ShowProjectedMonth = settings.ShowProjectedMonth;
         ShowProjectedShift = settings.ShowProjectedShift;
+        ShowRvuPerStudy = settings.ShowRvuPerStudy;
         ShowPaceCar = settings.ShowPaceCar;
 
         // Compensation visibility
@@ -1554,6 +1562,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             };
         }
 
+        if (ShowRvuPerStudy)
+        {
+            rowsByKey["rvu_per_study"] = new MainStatDisplayRow
+            {
+                Key = "rvu_per_study",
+                Label = "RVU/study:",
+                Value = StudyCount > 0 ? $"{(TotalRvu / StudyCount):F2}" : "0.00",
+                Compensation = "",
+                ShowCompensation = false
+            };
+        }
+
         if (ShowLastHour)
         {
             rowsByKey["last_hour"] = new MainStatDisplayRow
@@ -1828,6 +1848,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     "best_week" => "Week:",
                     "best_ever" => "Best:",
+                    var m when m.StartsWith("shift_") => $"{compareShift.ShiftStart:ddd}:",
                     _ => "Prior:"
                 };
             }
@@ -1892,6 +1913,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             "best_week" => GetBestThisWeek(allShifts),
             "best_ever" => allShifts.Where(s => s.Duration.TotalHours >= 7 && s.Duration.TotalHours <= 11)
                                     .OrderByDescending(s => s.TotalRvu).FirstOrDefault(),
+            var m when m.StartsWith("shift_") => GetShiftById(allShifts, m),
             var m when m.StartsWith("week_") => GetWeekShift(allShifts, m),
             _ => allShifts.FirstOrDefault()
         };
@@ -1909,9 +1931,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .FirstOrDefault();
     }
 
+    private Shift? GetShiftById(List<Shift> shifts, string mode)
+    {
+        // mode is like "shift_42"
+        if (!int.TryParse(mode[6..], out var id))
+            return shifts.FirstOrDefault();
+
+        return shifts.FirstOrDefault(s => s.Id == id);
+    }
+
     private Shift? GetWeekShift(List<Shift> shifts, string mode)
     {
-        // mode is like "week_0", "week_1", etc.
+        // Legacy: mode is like "week_0", "week_1", etc.
         if (!int.TryParse(mode.Replace("week_", ""), out var idx))
             return shifts.FirstOrDefault();
 
@@ -2061,11 +2092,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var currentHourRvu = ProjectedThisHour;
         var priorHourRvu = LastFullHourRvu;
         var estimatedTotalRvu = ProjectedShiftTotal;
+        var rvuPerStudy = recordCount > 0 ? totalRvu / recordCount : 0.0;
+        var avgPerHour = AvgPerHour;
+        var paceDiff = PaceDiff;
+        var paceTargetRvu = TargetRvu;
 
         // Only send if values changed
         if (totalRvu == _lastSentTotalRvu && recordCount == _lastSentRecordCount &&
             currentHourRvu == _lastSentCurrentHourRvu && priorHourRvu == _lastSentPriorHourRvu &&
-            estimatedTotalRvu == _lastSentEstimatedTotalRvu)
+            estimatedTotalRvu == _lastSentEstimatedTotalRvu &&
+            paceDiff == _lastSentPaceDiff && paceTargetRvu == _lastSentPaceTargetRvu)
             return;
 
         _lastSentTotalRvu = totalRvu;
@@ -2073,6 +2109,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _lastSentCurrentHourRvu = currentHourRvu;
         _lastSentPriorHourRvu = priorHourRvu;
         _lastSentEstimatedTotalRvu = estimatedTotalRvu;
+        _lastSentPaceDiff = paceDiff;
+        _lastSentPaceTargetRvu = paceTargetRvu;
 
         _pipeClient.SendShiftInfo(
             totalRvu,
@@ -2081,7 +2119,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             IsShiftActive,
             currentHourRvu,
             priorHourRvu,
-            estimatedTotalRvu);
+            estimatedTotalRvu,
+            rvuPerStudy: rvuPerStudy,
+            avgPerHour: avgPerHour,
+            paceComparisonMode: PaceComparisonMode,
+            paceCurrentRvu: totalRvu,
+            paceTargetRvu: paceTargetRvu,
+            paceDiff: paceDiff,
+            paceTimeText: PaceTimeText,
+            paceDescription: PaceDescription);
     }
 
     private bool _isScanning = false;
@@ -3383,11 +3429,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 "goal" => "vs Daily Goal",
                 "best_week" => "vs Best This Week",
                 "best_ever" => "vs Best Ever",
-                "week_1" => "vs 1 Week Ago",
-                "week_2" => "vs 2 Weeks Ago",
-                "week_3" => "vs 3 Weeks Ago",
-                "week_4" => "vs 4 Weeks Ago",
-                _ when mode.StartsWith("week_") => $"vs This Week",
+                _ when mode.StartsWith("shift_") => "vs Selected Shift",
+                _ when mode.StartsWith("week_") => "vs This Week",
                 _ => "vs Prior Shift"
             };
 

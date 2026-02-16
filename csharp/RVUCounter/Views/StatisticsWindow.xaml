@@ -327,6 +327,9 @@
                                     <!-- Spinner display (editable rows) -->
                                     <StackPanel Orientation="Horizontal"
                                                 Visibility="{Binding IsEditable, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Text="{Binding HintText}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                   Foreground="{DynamicResource SecondaryTextBrush}" FontStyle="Italic"
+                                                   Visibility="{Binding HintText, Converter={StaticResource NonEmptyToVisibility}}"/>
                                         <Button Content="−" Width="22" Height="20" FontWeight="Bold" Padding="0" Margin="0,0,4,0"
                                                 Command="{Binding Data.DecrementProjectionValueCommand, Source={StaticResource Proxy}}"
                                                 CommandParameter="{Binding EditKey}"

@@ -21,6 +21,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         "total",
         "avg",
+        "rvu_per_study",
         "last_hour",
         "last_full_hour",
         "projected_hour",
@@ -32,6 +33,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         ["total"] = ("Total wRVU", "Current shift total RVU."),
         ["avg"] = ("Average per hour", "Shift RVU pace based on elapsed hours."),
+        ["rvu_per_study"] = ("RVU/study", "Average RVU per completed study."),
         ["last_hour"] = ("Last hour", "Rolling last 60 minutes."),
         ["last_full_hour"] = ("Last full hour", "Previous complete clock hour."),
         ["projected_hour"] = ("Est. this hour", "Projected RVU for current hour."),
@@ -185,6 +187,9 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _showProjectedShift;
+
+    [ObservableProperty]
+    private bool _showRvuPerStudy;
 
     [ObservableProperty]
     private bool _showPaceCar;
@@ -492,6 +497,7 @@ public partial class SettingsViewModel : ObservableObject
                 HelpText = help,
                 ShowCounter = GetCounterVisibilityByKey(key),
                 ShowCompensation = GetCompVisibilityByKey(key),
+                SupportsCompensation = key != "rvu_per_study",
                 Position = position++
             });
         }
@@ -534,6 +540,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         "total" => ShowTotal,
         "avg" => ShowAvg,
+        "rvu_per_study" => ShowRvuPerStudy,
         "last_hour" => ShowLastHour,
         "last_full_hour" => ShowLastFullHour,
         "projected_hour" => ShowProjected,
@@ -567,6 +574,9 @@ public partial class SettingsViewModel : ObservableObject
                 case "avg":
                     ShowAvg = item.ShowCounter;
                     ShowCompAvg = item.ShowCompensation;
+                    break;
+                case "rvu_per_study":
+                    ShowRvuPerStudy = item.ShowCounter;
                     break;
                 case "last_hour":
                     ShowLastHour = item.ShowCounter;
@@ -1261,6 +1271,7 @@ public partial class SettingsViewModel : ObservableObject
         ShowProjected = settings.ShowProjected;
         ShowProjectedMonth = settings.ShowProjectedMonth;
         ShowProjectedShift = settings.ShowProjectedShift;
+        ShowRvuPerStudy = settings.ShowRvuPerStudy;
         ShowPaceCar = settings.ShowPaceCar;
         ShowInpatientStatPercentage = settings.ShowInpatientStatPercentage;
         LoadMainStatOrder(settings.MainStatsOrder);
@@ -1336,6 +1347,7 @@ public partial class SettingsViewModel : ObservableObject
         settings.ShowProjected = ShowProjected;
         settings.ShowProjectedMonth = ShowProjectedMonth;
         settings.ShowProjectedShift = ShowProjectedShift;
+        settings.ShowRvuPerStudy = ShowRvuPerStudy;
         settings.ShowPaceCar = ShowPaceCar;
         settings.ShowInpatientStatPercentage = ShowInpatientStatPercentage;
         settings.MainStatsOrder = MainStatOrderItems.Select(i => i.Key).ToList();
@@ -1402,6 +1414,7 @@ public partial class MainStatOrderItem : ObservableObject
     public string Key { get; set; } = "";
     public string Label { get; set; } = "";
     public string HelpText { get; set; } = "";
+    public bool SupportsCompensation { get; set; } = true;
 
     [ObservableProperty]
     private int _position;
@@ -1413,7 +1426,7 @@ public partial class MainStatOrderItem : ObservableObject
     [ObservableProperty]
     private bool _showCompensation;
 
-    public bool CanShowCompensation => ShowCounter;
+    public bool CanShowCompensation => ShowCounter && SupportsCompensation;
 
     partial void OnShowCounterChanged(bool value)
     {

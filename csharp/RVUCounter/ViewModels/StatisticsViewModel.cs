@@ -2055,6 +2055,19 @@ public partial class StatisticsViewModel : ObservableObject
             var targetShifts = _dataManager.Settings.ProjectionDays;
             var extraHours = _dataManager.Settings.ProjectionExtraHours;
 
+            // Calculate hint for extra hours from completed non-standard shifts this month
+            var completedMonthShifts = _dataManager.Database.GetShiftsInDateRange(monthStart, monthEnd)
+                .Where(s => s.ShiftEnd != null).ToList();
+            var nonStandardHours = 0.0;
+            foreach (var shift in completedMonthShifts)
+            {
+                var hours = shift.Duration.TotalHours;
+                // "Full" shifts are within 1.5 hours of the configured shift length
+                if (hours < shiftLength - 1.5 || hours > shiftLength + 1.5)
+                    nonStandardHours += hours;
+            }
+            var extraHoursHint = nonStandardHours > 0 ? $"~{nonStandardHours:F0}h" : "";
+
             // Calculate target hours from shifts * shift length + extra hours
             var targetMonthlyHours = (targetShifts * shiftLength) + extraHours;
 
@@ -2078,7 +2091,7 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = $"Hours Worked in {currentMonthName}", Col2 = $"{actualMonthHours:F1}" });
             TableData.Add(new StatRow { Col1 = $"Target {currentMonthName} Hours", Col2 = $"{targetMonthlyHours:F0}" });
             TableData.Add(new StatRow { Col1 = $"Target {currentMonthName} Shifts", Col2 = $"{targetShifts}", IsEditable = true, EditKey = "ProjectionDays" });
-            TableData.Add(new StatRow { Col1 = "Extra Hours", Col2 = $"{extraHours}", IsEditable = true, EditKey = "ProjectionExtraHours" });
+            TableData.Add(new StatRow { Col1 = "Extra Hours", Col2 = $"{extraHours}", IsEditable = true, EditKey = "ProjectionExtraHours", HintText = extraHoursHint });
             TableData.Add(new StatRow { Col1 = "Remaining Hours", Col2 = $"{remainingHours:F1}" });
 
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
@@ -2929,6 +2942,7 @@ public class StatRow
     public bool IsSpacer { get; set; }  // Empty spacer rows between sections
     public bool IsEditable { get; set; }  // Row with editable number control
     public string EditKey { get; set; } = "";  // Key for identifying which setting to edit
+    public string HintText { get; set; } = "";  // Optional hint shown left of spinner
 }
 
 /// <summary>

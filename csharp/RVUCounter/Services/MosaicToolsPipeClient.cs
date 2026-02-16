@@ -99,7 +99,11 @@ public sealed class MosaicToolsPipeClient : IDisposable
     /// Safe to call from any thread; silently ignored if not connected.
     /// </summary>
     public void SendShiftInfo(double totalRvu, int recordCount, string? shiftStart, bool isActive,
-                              double? currentHourRvu = null, double? priorHourRvu = null, double? estimatedTotalRvu = null)
+                              double? currentHourRvu = null, double? priorHourRvu = null, double? estimatedTotalRvu = null,
+                              double? rvuPerStudy = null, double? avgPerHour = null,
+                              string? paceComparisonMode = null, double? paceCurrentRvu = null,
+                              double? paceTargetRvu = null, double? paceDiff = null,
+                              string? paceTimeText = null, string? paceDescription = null)
     {
         var msg = new PipeMessage
         {
@@ -110,7 +114,15 @@ public sealed class MosaicToolsPipeClient : IDisposable
             IsShiftActive = isActive,
             CurrentHourRvu = currentHourRvu,
             PriorHourRvu = priorHourRvu,
-            EstimatedTotalRvu = estimatedTotalRvu
+            EstimatedTotalRvu = estimatedTotalRvu,
+            RvuPerStudy = rvuPerStudy,
+            AvgPerHour = avgPerHour,
+            PaceComparisonMode = paceComparisonMode,
+            PaceCurrentRvu = paceCurrentRvu,
+            PaceTargetRvu = paceTargetRvu,
+            PaceDiff = paceDiff,
+            PaceTimeText = paceTimeText,
+            PaceDescription = paceDescription
         };
 
         SendMessage(msg);
@@ -418,6 +430,31 @@ internal class PipeMessage
 
     [JsonPropertyName("estimatedTotalRvu")]
     public double? EstimatedTotalRvu { get; set; }
+
+    [JsonPropertyName("rvuPerStudy")]
+    public double? RvuPerStudy { get; set; }
+
+    [JsonPropertyName("avgPerHour")]
+    public double? AvgPerHour { get; set; }
+
+    // pace car fields (RVU → MT)
+    [JsonPropertyName("paceComparisonMode")]
+    public string? PaceComparisonMode { get; set; }
+
+    [JsonPropertyName("paceCurrentRvu")]
+    public double? PaceCurrentRvu { get; set; }
+
+    [JsonPropertyName("paceTargetRvu")]
+    public double? PaceTargetRvu { get; set; }
+
+    [JsonPropertyName("paceDiff")]
+    public double? PaceDiff { get; set; }
+
+    [JsonPropertyName("paceTimeText")]
+    public string? PaceTimeText { get; set; }
+
+    [JsonPropertyName("paceDescription")]
+    public string? PaceDescription { get; set; }
 
     // distraction_alert fields (RVU → MT)
     [JsonPropertyName("studyType")]

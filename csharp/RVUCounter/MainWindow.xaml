@@ -636,13 +636,17 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" FontSize="{DynamicResource FontSizeSmall}"
                                Foreground="{DynamicResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Column="1" Text="{Binding PipeStatusText}" FontSize="{DynamicResource FontSizeSmall}"
+                    <TextBlock Grid.Column="1" Text="{Binding AppVersion}" FontSize="{DynamicResource FontSizeXSmall}"
+                               Foreground="{DynamicResource SecondaryTextBrush}" Opacity="0.5"
+                               VerticalAlignment="Center" Margin="6,0"/>
+                    <TextBlock Grid.Column="2" Text="{Binding PipeStatusText}" FontSize="{DynamicResource FontSizeSmall}"
                                Foreground="{Binding PipeStatusColor}" Margin="6,0"
                                ToolTip="{Binding PipeStatusTooltip}"/>
-                    <TextBlock Grid.Column="2" Text="{Binding ShiftDuration}" FontSize="{DynamicResource FontSizeSmall}"
+                    <TextBlock Grid.Column="3" Text="{Binding ShiftDuration}" FontSize="{DynamicResource FontSizeSmall}"
                                Foreground="{DynamicResource SecondaryTextBrush}"/>
                 </Grid>
             </Border>
