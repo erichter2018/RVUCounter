@@ -3096,7 +3096,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void StartShift()
+    private void StartShorterShift()
+    {
+        var dialog = new Views.ShiftDurationDialog();
+        dialog.Owner = System.Windows.Application.Current.MainWindow;
+        if (dialog.ShowDialog() == true)
+        {
+            StartShiftWithDuration(dialog.ShiftHours);
+        }
+    }
+
+    [RelayCommand]
+    private void StartShift() => StartShiftWithDuration(_dataManager.Settings.ShiftLengthHours);
+
+    private void StartShiftWithDuration(double shiftHours)
     {
         if (IsShiftActive) return;
 
@@ -3156,7 +3169,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             effectiveStart = now;
         }
 
-        var projectedEnd = effectiveStart.AddHours(_dataManager.Settings.ShiftLengthHours);
+        var projectedEnd = effectiveStart.AddHours(shiftHours);
 
         _dataManager.Database.StartShift(now, effectiveStart, projectedEnd);
         _shiftStart = now;
@@ -3202,7 +3215,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CalculateAndUpdateStats();
         UpdateRecentStudiesDisplay();
         StatusMessage = "Shift started";
-        Log.Information("Shift started at {Time}", now);
+        Log.Information("Shift started at {Time} ({Hours:F1}h)", now, shiftHours);
     }
 
     [RelayCommand]

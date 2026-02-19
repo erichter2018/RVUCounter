@@ -233,4 +233,14 @@ public partial class MainWindow : Window
         ViewModel?.ToggleTeamViewModeCommand.Execute(null);
         e.Handled = true; // Prevent header click from also firing
     }
+
+    private void StartShiftDropdown_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.ContextMenu != null)
+        {
+            btn.ContextMenu.DataContext = DataContext;
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
+    }
 }

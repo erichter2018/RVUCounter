@@ -1,7 +1,9 @@
+using System.Runtime.InteropServices;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.UIA3;
+using FlaUI.UIA3.Converters;
 using Serilog;
 
 namespace RVUCounter.Utils;
@@ -97,25 +99,37 @@ public static class WindowExtraction
 
             while (DateTime.Now < deadline)
             {
-                var windows = desktop.FindAllChildren(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
-
-                foreach (var window in windows)
+                AutomationElement[]? windows = null;
+                AutomationElement? found = null;
+                try
                 {
-                    try
+                    windows = desktop.FindAllChildren(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
+
+                    foreach (var window in windows)
                     {
-                        var title = window.Name;
-                        if (!string.IsNullOrEmpty(title) &&
-                            title.Contains(titleContains, StringComparison.OrdinalIgnoreCase))
+                        try
                         {
-                            Log.Debug("Found window: {Title}", title);
-                            RecordUiaSuccess();
-                            return window;
+                            var title = window.Name;
+                            if (!string.IsNullOrEmpty(title) &&
+                                title.Contains(titleContains, StringComparison.OrdinalIgnoreCase))
+                            {
+                                Log.Debug("Found window: {Title}", title);
+                                RecordUiaSuccess();
+                                found = window;
+                                return found;
+                            }
+                        }
+                        catch
+                        {
+                            // Window may have closed, continue
                         }
                     }
-                    catch
-                    {
-                        // Window may have closed, continue
-                    }
+                }
+                finally
+                {
+                    if (windows != null)
+                        foreach (var w in windows)
+                            if (w != found) ReleaseElement(w);
                 }
 
                 Thread.Sleep(100);
@@ -205,17 +219,20 @@ public static class WindowExtraction
         int timeoutMs = 10000)
     {
         var result = new List<AutomationElement>();
+        var resultSet = new HashSet<AutomationElement>(ReferenceEqualityComparer.Instance);
         using var cts = new CancellationTokenSource(timeoutMs);
+        AutomationElement[]? descendants = null;
 
         try
         {
-            var descendants = element.FindAllDescendants();
+            descendants = element.FindAllDescendants();
             foreach (var desc in descendants)
             {
                 if (cts.Token.IsCancellationRequested || result.Count >= maxElements)
                     break;
 
                 result.Add(desc);
+                resultSet.Add(desc);
             }
         }
         catch (OperationCanceledException)
@@ -231,6 +248,13 @@ public static class WindowExtraction
         {
             Log.Warning(ex, "Error getting descendants");
             RecordUiaFailure();
+        }
+        finally
+        {
+            // Release elements that were NOT added to result (exceeded cap or timed out)
+            if (descendants != null)
+                foreach (var d in descendants)
+                    if (!resultSet.Contains(d)) ReleaseElement(d);
         }
 
         if (result.Count > 0)
@@ -368,6 +392,42 @@ public static class WindowExtraction
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// Release COM RCW wrappers for an array of AutomationElements.
+    /// Call after FindAllDescendants/FindAllChildren results are no longer needed.
+    /// </summary>
+    public static void ReleaseElements(AutomationElement[]? elements)
+    {
+        if (elements == null) return;
+        foreach (var el in elements)
+            ReleaseElement(el);
+    }
+
+    /// <summary>
+    /// Release COM RCW wrappers for a list of AutomationElements.
+    /// </summary>
+    public static void ReleaseElements(List<AutomationElement>? elements)
+    {
+        if (elements == null) return;
+        foreach (var el in elements)
+            ReleaseElement(el);
+    }
+
+    /// <summary>
+    /// Release the COM RCW wrapper for a single AutomationElement.
+    /// </summary>
+    public static void ReleaseElement(AutomationElement? el)
+    {
+        if (el == null) return;
+        try
+        {
+            if (el.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
+                Marshal.ReleaseComObject(uia3.NativeElement);
+        }
+        catch (InvalidComObjectException) { }
+        catch (Exception) { }
     }
 
     /// <summary>

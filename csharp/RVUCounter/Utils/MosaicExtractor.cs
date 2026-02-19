@@ -63,6 +63,7 @@ public static class MosaicExtractor
     /// </summary>
     public static MosaicStudyData? ExtractStudyData()
     {
+        List<AutomationElement>? elements = null;
         try
         {
             var window = FindMosaicWindow();
@@ -73,7 +74,7 @@ public static class MosaicExtractor
             }
 
             // Get all descendants
-            var elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: Core.Config.UiAutomationMaxElements, timeoutMs: 8000);
+            elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: Core.Config.UiAutomationMaxElements, timeoutMs: 8000);
             Log.Debug("Found {Count} elements in Mosaic", elements.Count);
 
             var result = new MosaicStudyData();
@@ -333,6 +334,10 @@ public static class MosaicExtractor
             Log.Error(ex, "Error extracting data from Mosaic");
             return null;
         }
+        finally
+        {
+            WindowExtraction.ReleaseElements(elements);
+        }
     }
 
     /// <summary>
@@ -544,13 +549,14 @@ public static class MosaicExtractor
     /// </summary>
     public static List<string> GetVisibleAccessions()
     {
+        List<AutomationElement>? elements = null;
         try
         {
             var window = FindMosaicWindow();
             if (window == null)
                 return new List<string>();
 
-            var elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: Core.Config.MosaicScanMaxElements, timeoutMs: Core.Config.UiAutomationTimeoutMs);
+            elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: Core.Config.MosaicScanMaxElements, timeoutMs: Core.Config.UiAutomationTimeoutMs);
             var accessions = new HashSet<string>();
 
             foreach (var element in elements)
@@ -576,6 +582,10 @@ public static class MosaicExtractor
         {
             Log.Warning(ex, "Error getting visible accessions from Mosaic");
             return new List<string>();
+        }
+        finally
+        {
+            WindowExtraction.ReleaseElements(elements);
         }
     }
 }

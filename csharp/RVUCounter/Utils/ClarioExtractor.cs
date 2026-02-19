@@ -67,57 +67,70 @@ public static class ClarioExtractor
             var desktop = automation.GetDesktop();
             var cf = automation.ConditionFactory;
 
-            var windows = desktop.FindAllChildren(cf.ByControlType(ControlType.Window));
-
-            foreach (var window in windows)
+            AutomationElement[]? windows = null;
+            AutomationElement? found = null;
+            try
             {
-                try
+                windows = desktop.FindAllChildren(cf.ByControlType(ControlType.Window));
+
+                foreach (var window in windows)
                 {
-                    var title = window.Name?.ToLowerInvariant() ?? "";
-
-                    // Exclude test/viewer windows and RVU Counter
-                    if (title.Contains("rvu counter") ||
-                        title.Contains("test") ||
-                        title.Contains("viewer") ||
-                        title.Contains("ui elements") ||
-                        title.Contains("diagnostic"))
+                    try
                     {
-                        continue;
-                    }
+                        var title = window.Name?.ToLowerInvariant() ?? "";
 
-                    // Look for Chrome window with "clario" and "worklist" in title
-                    if (title.Contains("clario") && title.Contains("worklist"))
-                    {
-                        Log.Debug("Found Clario window: '{Title}'", window.Name);
-                        try
+                        // Exclude test/viewer windows and RVU Counter
+                        if (title.Contains("rvu counter") ||
+                            title.Contains("test") ||
+                            title.Contains("viewer") ||
+                            title.Contains("ui elements") ||
+                            title.Contains("diagnostic"))
                         {
-                            var className = window.Properties.ClassName.ValueOrDefault?.ToLowerInvariant() ?? "";
-                            if (className.Contains("chrome"))
+                            continue;
+                        }
+
+                        // Look for Chrome window with "clario" and "worklist" in title
+                        if (title.Contains("clario") && title.Contains("worklist"))
+                        {
+                            Log.Debug("Found Clario window: '{Title}'", window.Name);
+                            try
                             {
+                                var className = window.Properties.ClassName.ValueOrDefault?.ToLowerInvariant() ?? "";
+                                if (className.Contains("chrome"))
+                                {
+                                    lock (_cacheLock)
+                                    {
+                                        _cachedChromeWindow = window;
+                                    }
+                                    found = window;
+                                    return found;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // If we can't check class name, still return it if title matches
+                                Log.Debug(ex, "Could not check class name for Clario window, using title match");
                                 lock (_cacheLock)
                                 {
                                     _cachedChromeWindow = window;
                                 }
-                                return window;
+                                found = window;
+                                return found;
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            // If we can't check class name, still return it if title matches
-                            Log.Debug(ex, "Could not check class name for Clario window, using title match");
-                            lock (_cacheLock)
-                            {
-                                _cachedChromeWindow = window;
-                            }
-                            return window;
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        Log.Debug(ex, "Error checking window during Clario search");
+                        continue;
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "Error checking window during Clario search");
-                    continue;
-                }
+            }
+            finally
+            {
+                if (windows != null)
+                    foreach (var w in windows)
+                        if (w != found) WindowExtraction.ReleaseElement(w);
             }
         }
         catch (Exception ex)
@@ -159,10 +172,12 @@ public static class ClarioExtractor
             }
         }
 
+        List<AutomationElement>? descendants = null;
+        AutomationElement? found = null;
         try
         {
             // Get descendants with limit to prevent blocking
-            var descendants = WindowExtraction.GetDescendantsWithTimeout(chromeWindow, maxElements: Core.Config.ClarioMaxElements, timeoutMs: Core.Config.UiAutomationTimeoutMs);
+            descendants = WindowExtraction.GetDescendantsWithTimeout(chromeWindow, maxElements: Core.Config.ClarioMaxElements, timeoutMs: Core.Config.UiAutomationTimeoutMs);
 
             // Look for elements with control type Document or Pane
             foreach (var child in descendants)
@@ -179,7 +194,8 @@ public static class ClarioExtractor
                             {
                                 _cachedContentArea = child;
                             }
-                            return child;
+                            found = child;
+                            return found;
                         }
                     }
                 }
@@ -203,7 +219,8 @@ public static class ClarioExtractor
                         {
                             _cachedContentArea = child;
                         }
-                        return child;
+                        found = child;
+                        return found;
                     }
                 }
                 catch (Exception ex)
@@ -216,6 +233,13 @@ public static class ClarioExtractor
         catch (Exception ex)
         {
             Log.Debug(ex, "Error finding Clario content area");
+        }
+        finally
+        {
+            // Release all elements except the one we're keeping
+            if (descendants != null)
+                foreach (var d in descendants)
+                    if (d != found) WindowExtraction.ReleaseElement(d);
         }
 
         // Last resort: return the window itself
@@ -423,17 +447,22 @@ public static class ClarioExtractor
                 return;
 
             // Recursively get children
+            AutomationElement[]? children = null;
             try
             {
-                var children = element.FindAllChildren();
+                children = element.FindAllChildren();
                 foreach (var child in children)
                 {
                     if (elements.Count >= maxElements || stopwatch.ElapsedMilliseconds >= timeoutMs)
-                        return;
+                        break;
                     GetElementsRecursiveInternal(child, depth + 1, maxDepth, elements, maxElements, stopwatch, timeoutMs);
                 }
             }
             catch { /* Children enumeration can fail transiently — silent */ }
+            finally
+            {
+                WindowExtraction.ReleaseElements(children);
+            }
         }
         catch { /* Element processing can fail transiently — silent */ }
     }
@@ -794,6 +823,7 @@ public static class ClarioExtractor
     public static List<ClarioExamNote> GetExamNotes()
     {
         var notes = new List<ClarioExamNote>();
+        List<AutomationElement>? elements = null;
 
         try
         {
@@ -804,7 +834,7 @@ public static class ClarioExtractor
                 return notes;
             }
 
-            var elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: 2000, timeoutMs: 8000);
+            elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: 2000, timeoutMs: 8000);
 
             foreach (var element in elements)
             {
@@ -835,6 +865,10 @@ public static class ClarioExtractor
         catch (Exception ex)
         {
             Log.Error(ex, "Error getting exam notes from Clario");
+        }
+        finally
+        {
+            WindowExtraction.ReleaseElements(elements);
         }
 
         return notes;
@@ -874,9 +908,10 @@ public static class ClarioExtractor
             }
 
             // Get the actual note content from children
+            AutomationElement[]? children = null;
             try
             {
-                var children = element.FindAllChildren();
+                children = element.FindAllChildren();
                 foreach (var child in children)
                 {
                     var childText = WindowExtraction.GetElementText(child);
@@ -890,6 +925,10 @@ public static class ClarioExtractor
             catch
             {
                 // Children may not be accessible
+            }
+            finally
+            {
+                WindowExtraction.ReleaseElements(children);
             }
 
             return note.Accession != null ? note : null;
@@ -905,13 +944,14 @@ public static class ClarioExtractor
     /// </summary>
     public static CriticalFindingsData? GetCriticalFindings(string accession)
     {
+        List<AutomationElement>? elements = null;
         try
         {
             var window = FindClarioWindow();
             if (window == null)
                 return null;
 
-            var elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: 3000, timeoutMs: 10000);
+            elements = WindowExtraction.GetDescendantsWithTimeout(window, maxElements: 3000, timeoutMs: 10000);
             var findings = new CriticalFindingsData { Accession = accession };
 
             bool foundAccession = false;
@@ -963,6 +1003,10 @@ public static class ClarioExtractor
         {
             Log.Error(ex, "Error getting critical findings from Clario for {Accession}", accession);
             return null;
+        }
+        finally
+        {
+            WindowExtraction.ReleaseElements(elements);
         }
     }
 

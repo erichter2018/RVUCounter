@@ -135,11 +135,13 @@ public static class ClarioLauncher
     /// </summary>
     private static AutomationElement? FindAccessionSearchField(AutomationElement chromeWindow)
     {
+        AutomationElement[]? allEdits = null;
+        AutomationElement? found = null;
         try
         {
             var automation = WindowExtraction.GetAutomation();
             var cf = automation.ConditionFactory;
-            var allEdits = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.Edit));
+            allEdits = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.Edit));
 
             Log.Debug("ClarioLauncher: {Total} Edit fields total", allEdits.Length);
 
@@ -163,7 +165,8 @@ public static class ClarioLauncher
                     {
                         // The very next Edit after fulltext is the accession field
                         Log.Information("ClarioLauncher: Using field after fulltext: AutomationId='{Id}'", autoId);
-                        return edit;
+                        found = edit;
+                        return found;
                     }
                 }
                 catch { }
@@ -177,6 +180,12 @@ public static class ClarioLauncher
             Log.Warning(ex, "ClarioLauncher: Error finding accession field");
             return null;
         }
+        finally
+        {
+            if (allEdits != null)
+                foreach (var e in allEdits)
+                    if (e != found) WindowExtraction.ReleaseElement(e);
+        }
     }
 
     /// <summary>
@@ -186,13 +195,15 @@ public static class ClarioLauncher
     /// </summary>
     private static AutomationElement? FindActionColumnCell(AutomationElement chromeWindow)
     {
+        AutomationElement[]? allDataItems = null;
+        AutomationElement? found = null;
         try
         {
             var automation = WindowExtraction.GetAutomation();
             var cf = automation.ConditionFactory;
 
             // Find all DataItem elements (grid cells)
-            var allDataItems = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.DataItem));
+            allDataItems = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.DataItem));
 
             Log.Debug("ClarioLauncher: Scanning {Count} DataItem elements for action column", allDataItems.Length);
 
@@ -208,7 +219,8 @@ public static class ClarioLauncher
                         className.Contains("search_result"))
                     {
                         Log.Information("ClarioLauncher: Found search result action cell");
-                        return item;
+                        found = item;
+                        return found;
                     }
                 }
                 catch { }
@@ -221,6 +233,12 @@ public static class ClarioLauncher
         {
             Log.Warning(ex, "ClarioLauncher: Error finding action column");
             return null;
+        }
+        finally
+        {
+            if (allDataItems != null)
+                foreach (var d in allDataItems)
+                    if (d != found) WindowExtraction.ReleaseElement(d);
         }
     }
 

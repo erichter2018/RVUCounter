@@ -158,10 +158,39 @@
                 </Grid.ColumnDefinitions>
                 
                 <!-- Start/Stop Button -->
-                <Button Grid.Column="0" Style="{StaticResource ShiftButton}"
-                        Background="{DynamicResource SuccessBrush}" Foreground="White"
-                        Content="Start Shift" Command="{Binding StartShiftCommand}"
-                        Visibility="{Binding IsShiftActive, Converter={StaticResource InverseBoolToVisibility}}"/>
+                <Grid Grid.Column="0" Visibility="{Binding IsShiftActive, Converter={StaticResource InverseBoolToVisibility}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Background="{DynamicResource SuccessBrush}" Foreground="White"
+                            Padding="12,6" FontWeight="SemiBold" Cursor="Hand"
+                            Content="Start Shift" Command="{Binding StartShiftCommand}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="4,0,0,4" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <Button Grid.Column="1" Background="{DynamicResource SuccessBrush}" Foreground="White"
+                            Cursor="Hand" Padding="4,6" Margin="1,0,0,0"
+                            Click="StartShiftDropdown_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="0,4,4,0" Padding="{TemplateBinding Padding}">
+                                    <TextBlock Text="&#x25BC;" FontSize="8" VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Start Shorter Shift..." Command="{Binding StartShorterShiftCommand}"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </Grid>
                 <Button Grid.Column="0" Style="{StaticResource ShiftButton}"
                         Background="{DynamicResource DangerBrush}" Foreground="White"
                         Content="Stop Shift" Command="{Binding EndShiftCommand}"
