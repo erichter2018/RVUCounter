@@ -9,10 +9,10 @@ namespace RVUCounter.Utils;
 /// Extracts study data from Mosaic Info Hub.
 /// Mosaic is a WinForms app with WebView2 containing study information.
 /// </summary>
-public static class MosaicExtractor
+public class MosaicExtractor : IMosaicReader
 {
     private const string MosaicWindowTitle = "Mosaic Reporting";
-    private const string MosaicProcessName = "Mosaic.InfoHub";
+    private const string MosaicProcessName = "MosaicInfoHub";
 
     /// <summary>
     /// Element info record capturing Name, Text, Index, ControlType, and ClassName.
@@ -34,10 +34,15 @@ public static class MosaicExtractor
     private static readonly Regex AccessionPattern1 = new(@"\b[A-Z]{0,3}\d{2,}[A-Z0-9]*\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex AccessionPattern2 = new(@"\b[A-Z]{2,3}\d{5,10}\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Fix 7: Rate-limit FindAllDescendants — cache scan results for 3 seconds
+    private MosaicStudyData? _lastScanResult;
+    private long _lastScanTick64;
+    private const long ScanCacheIntervalMs = 3000;
+
     /// <summary>
     /// Find the Mosaic Info Hub main window.
     /// </summary>
-    public static AutomationElement? FindMosaicWindow()
+    public AutomationElement? FindMosaicWindow()
     {
         // Try by process name first
         var window = WindowExtraction.FindWindowByProcessName(MosaicProcessName);
@@ -51,18 +56,30 @@ public static class MosaicExtractor
     /// <summary>
     /// Check if Mosaic is currently running.
     /// </summary>
-    public static bool IsMosaicRunning()
+    public bool IsMosaicRunning()
     {
         return FindMosaicWindow() != null;
     }
+
+    /// <summary>
+    /// Clear the scan cache, forcing the next ExtractStudyData call to do a fresh scan.
+    /// </summary>
+    public void ClearScanCache() { _lastScanResult = null; }
 
     /// <summary>
     /// Extract study data from Mosaic.
     /// Uses multi-pass approach like Python version for better accuracy.
     /// Returns dictionary with: procedure, accession, patient_class, multiple_accessions
     /// </summary>
-    public static MosaicStudyData? ExtractStudyData()
+    public MosaicStudyData? ExtractStudyData()
     {
+        // Fix 7: Return cached result if within cache interval
+        long now = Environment.TickCount64;
+        if (now - _lastScanTick64 < ScanCacheIntervalMs && _lastScanResult != null)
+        {
+            return _lastScanResult;
+        }
+
         List<AutomationElement>? elements = null;
         try
         {
@@ -85,6 +102,8 @@ public static class MosaicExtractor
             {
                 try
                 {
+                    // Use proven live reads with timeouts — cached reads return empty
+                    // for WebView2 elements whose properties load asynchronously
                     var text = WindowExtraction.GetElementText(elements[i]) ?? "";
                     var name = WindowExtraction.GetElementName(elements[i]) ?? "";
 
@@ -102,6 +121,26 @@ public static class MosaicExtractor
                     }
                 }
                 catch { /* Element inaccessible - expected for some UIA elements */ }
+            }
+
+            Log.Debug("Mosaic element loop: {Total} elements, {WithData} with text/name",
+                elements.Count, elementData.Count);
+
+            // If no elements have text, try one more diagnostic: sample control types
+            if (elementData.Count == 0 && elements.Count > 10)
+            {
+                var sampleTypes = new List<string>();
+                for (int i = 0; i < Math.Min(20, elements.Count); i++)
+                {
+                    try
+                    {
+                        var ct = elements[i].Properties.ControlType.ValueOrDefault;
+                        var cn = elements[i].Properties.ClassName.ValueOrDefault ?? "";
+                        sampleTypes.Add($"{ct}:{cn}");
+                    }
+                    catch { sampleTypes.Add("?"); }
+                }
+                Log.Debug("Mosaic element types: [{Types}]", string.Join(", ", sampleTypes));
             }
 
             // Single pass: extract all fields by recognizing labels and looking ahead
@@ -303,6 +342,22 @@ public static class MosaicExtractor
                 }
             }
 
+            // Safety net: reject fallback-only accessions with no procedure.
+            // When Mosaic is partially loaded (e.g. right after pipe disconnect), the
+            // "Current Study" / "Accession" labels aren't in the element tree yet, but
+            // the fallback scan picks up non-accession numbers (visit IDs, order numbers)
+            // that happen to pass IsAccessionLike. These create ghost 0-RVU studies.
+            if (!string.IsNullOrEmpty(result.Accession) &&
+                !foundCurrentStudy && !foundAccessionLabel &&
+                string.IsNullOrEmpty(result.Procedure))
+            {
+                Log.Debug("Rejecting fallback-only accession '{Accession}' with no procedure (partial UI load)",
+                    result.Accession);
+                result.Accession = null;
+                result.AllAccessions.Clear();
+                result.IsMultiAccession = false;
+            }
+
             // Safety net: reject accession if it matches the extracted MRN
             // The MRN is per-patient, not per-study, so using it as accession would
             // cause all studies from the same patient to hash identically
@@ -326,8 +381,27 @@ public static class MosaicExtractor
                 Log.Information("Extracted from Mosaic: {Accession} - {Procedure}",
                     result.Accession, result.Procedure);
             }
+            else if (elementData.Count > 0)
+            {
+                // Diagnostic: accession not found despite having element data
+                var sampleNames = elementData.Take(30)
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Name))
+                    .Select(e => e.Name.Length > 40 ? e.Name[..40] : e.Name);
+                Log.Debug("Mosaic scrape: {Total} elements, {WithData} with data, " +
+                    "foundCurrentStudy={CS}, foundAccessionLabel={AL}. " +
+                    "Sample names: [{Samples}]",
+                    elements?.Count ?? 0, elementData.Count,
+                    foundCurrentStudy, foundAccessionLabel,
+                    string.Join(" | ", sampleNames));
+            }
 
-            return !string.IsNullOrEmpty(result.Accession) ? result : null;
+            var finalResult = !string.IsNullOrEmpty(result.Accession) ? result : null;
+
+            // Fix 7: Cache the result for subsequent calls within the interval
+            _lastScanResult = finalResult;
+            _lastScanTick64 = Environment.TickCount64;
+
+            return finalResult;
         }
         catch (Exception ex)
         {
@@ -343,7 +417,7 @@ public static class MosaicExtractor
     /// <summary>
     /// Extract accession and optional procedure from text like "ACC123 (CT HEAD)"
     /// </summary>
-    private static (string Accession, string Procedure)? ExtractAccessionWithProcedure(string text)
+    private (string Accession, string Procedure)? ExtractAccessionWithProcedure(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
@@ -372,7 +446,7 @@ public static class MosaicExtractor
     /// <summary>
     /// Extract all accession-like strings from text.
     /// </summary>
-    private static List<string> ExtractAccessionsFromText(string text)
+    private List<string> ExtractAccessionsFromText(string text)
     {
         var accessions = new List<string>();
 
@@ -407,7 +481,7 @@ public static class MosaicExtractor
     /// <summary>
     /// Extract patient class from text.
     /// </summary>
-    private static string? ExtractPatientClass(string text)
+    private string? ExtractPatientClass(string text)
     {
         var lower = text.ToLowerInvariant();
 
@@ -425,7 +499,7 @@ public static class MosaicExtractor
     /// Extract patient name from text.
     /// Mosaic displays patient names as all-caps: "LASTNAME FIRSTNAME" or "LASTNAME FIRSTNAME MIDDLE"
     /// </summary>
-    private static string? ExtractPatientName(string text)
+    private string? ExtractPatientName(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
@@ -495,7 +569,7 @@ public static class MosaicExtractor
     /// Extract site code from text.
     /// Format: "Site Code: MLC" or just a 2-4 letter site code near site label
     /// </summary>
-    private static string? ExtractSiteCode(string text)
+    private string? ExtractSiteCode(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
@@ -514,7 +588,7 @@ public static class MosaicExtractor
     /// Extract MRN (Medical Record Number) from text.
     /// Format: "MRN: 1057034TCR" - alphanumeric, typically 6-15 characters
     /// </summary>
-    private static string? ExtractMrn(string text)
+    private string? ExtractMrn(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return null;
@@ -547,7 +621,7 @@ public static class MosaicExtractor
     /// <summary>
     /// Get a list of all visible accessions in Mosaic (for tracking comparison).
     /// </summary>
-    public static List<string> GetVisibleAccessions()
+    public List<string> GetVisibleAccessions()
     {
         List<AutomationElement>? elements = null;
         try

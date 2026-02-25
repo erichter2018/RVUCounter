@@ -42,6 +42,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _fatigueTimer;
     private readonly DispatcherTimer _backupTimer;
     private readonly BackupManager _backupManager;
+    private readonly Utils.MosaicExtractor _mosaicExtractor;
+    private readonly Utils.IMosaicReader _mosaicReader;
 
     // Named pipe client for MosaicTools bridge (replaces double-scraping)
     private MosaicToolsPipeClient? _pipeClient;
@@ -969,6 +971,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _dataManager = new DataManager(baseDir);
         _studyTracker = new StudyTracker(_dataManager.Settings.MinStudySeconds);
         _fatigueDetector = new FatigueDetector();
+        _mosaicExtractor = new Utils.MosaicExtractor();
+        _mosaicReader = _mosaicExtractor;
 
         // Load settings
         IsAlwaysOnTop = _dataManager.Settings.AlwaysOnTop;
@@ -2140,28 +2144,91 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            // When MosaicTools pipe is connected, use pipe data instead of scraping
+            // When MosaicTools pipe is connected, use pipe data — but supplement
+            // with Mosaic scraping when pipe doesn't provide procedure text.
+            ScanResult? pipeResult = null;
             if (_pipeClient != null && _pipeClient.IsConnected)
             {
-                var pipeResult = BuildScanResultFromPipe();
-                if (pipeResult != null)
+                pipeResult = BuildScanResultFromPipe();
+                if (pipeResult != null && !string.IsNullOrEmpty(pipeResult.StudyData?.Procedure))
                 {
+                    // Pipe has full data (accession + procedure) — use as-is
                     ApplyScanResults(pipeResult);
-                    // Override after ApplyScanResults (which sets "Mosaic")
                     DataSourceIndicator = "MT Pipe";
-                    // No Clario enrichment needed — pipe data already includes patient class
                     return;
                 }
-                // Pipe connected but no data yet — fall through to own scraping
+                // Pipe has no procedure (Desc=null) — fall through to Mosaic scraping
+                // and merge pipe's patient class (from Clario) into scraped results
             }
 
-            // Fallback: Run Mosaic extraction on background thread
+            // Run Mosaic extraction on background thread
             var result = await Task.Run(() => PerformMosaicScan());
 
-            // Apply Mosaic results on UI thread (no Clario delay)
+            // Determine best result: scraped data enriched with pipe, or pipe data as fallback
+            if (result?.StudyData != null && pipeResult?.StudyData != null)
+            {
+                // Scraping succeeded — merge pipe's patient class (from Clario, more reliable)
+                if (!string.IsNullOrEmpty(pipeResult.StudyData.PatientClass) &&
+                    pipeResult.StudyData.PatientClass != "Unknown")
+                {
+                    result.StudyData.PatientClass = pipeResult.StudyData.PatientClass;
+                }
+                if (!string.IsNullOrEmpty(pipeResult.StudyData.PatientName))
+                    result.StudyData.PatientName = pipeResult.StudyData.PatientName;
+                if (!string.IsNullOrEmpty(pipeResult.StudyData.SiteCode))
+                    result.StudyData.SiteCode = pipeResult.StudyData.SiteCode;
+                if (!string.IsNullOrEmpty(pipeResult.StudyData.Mrn))
+                    result.StudyData.Mrn = pipeResult.StudyData.Mrn;
+            }
+            else if ((result == null || string.IsNullOrEmpty(result.CurrentAccession)) &&
+                     pipeResult != null && !string.IsNullOrEmpty(pipeResult.CurrentAccession))
+            {
+                // Scraping failed but pipe has an accession — use pipe data as-is
+                // (study tracks as Unknown but at least it's tracked)
+                result = pipeResult;
+            }
+
+            // Bridge gap: when pipe just disconnected AND scraping can't find Mosaic
+            // (MosaicTools restart takes both down), use last known pipe data to prevent
+            // premature study completion and "detecting..." during the restart window.
+            if ((result == null || (!result.IsMosaicRunning && !result.IsClarioRunning)) &&
+                pipeResult == null && _pipeClient != null && !_pipeClient.IsConnected)
+            {
+                var lastPipeData = _pipeClient.LatestStudyData;
+                var lastDataTime = _pipeClient.LastDataReceived;
+                if (lastPipeData != null && !string.IsNullOrEmpty(lastPipeData.Accession) &&
+                    lastDataTime.HasValue && (DateTime.Now - lastDataTime.Value).TotalSeconds < 90)
+                {
+                    var patientClass = BuildPatientClassFromClario(lastPipeData.ClarioPriority, lastPipeData.ClarioClass);
+                    var studyData = new Utils.MosaicStudyData
+                    {
+                        Accession = lastPipeData.Accession,
+                        Procedure = lastPipeData.Description,
+                        PatientClass = patientClass,
+                        PatientName = lastPipeData.PatientName,
+                        SiteCode = lastPipeData.SiteCode,
+                        Mrn = lastPipeData.Mrn
+                    };
+                    result = new ScanResult(true, false, lastPipeData.Accession, studyData, null);
+                    Log.Debug("Using last known pipe data as bridge during MosaicTools restart: {Accession}", lastPipeData.Accession);
+                }
+            }
+
+            // Apply results on UI thread
             if (result != null)
             {
                 ApplyScanResults(result);
+                // Show source indicator based on what data we're actually using
+                if (pipeResult != null && ReferenceEquals(result, pipeResult))
+                    DataSourceIndicator = "MT Pipe";
+                else if (_pipeClient != null && !_pipeClient.IsConnected &&
+                         result.IsMosaicRunning && result.StudyData != null)
+                {
+                    // Check if this result came from the bridge fallback
+                    var lastPipeData = _pipeClient.LatestStudyData;
+                    if (lastPipeData != null && result.CurrentAccession == lastPipeData.Accession)
+                        DataSourceIndicator = "MT Bridge";
+                }
             }
             else
             {
@@ -2214,10 +2281,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private ScanResult PerformMosaicScan()
     {
+        // Periodic UIA health check — resets COM connection if stale
+        Utils.WindowExtraction.ResetUiaConnectionIfNeeded();
+
         // This runs on background thread — Mosaic only, no Clario (Clario runs separately)
-        if (Utils.MosaicExtractor.IsMosaicRunning())
+        if (_mosaicReader.IsMosaicRunning())
         {
-            var studyData = Utils.MosaicExtractor.ExtractStudyData();
+            var studyData = _mosaicReader.ExtractStudyData();
             var currentAccession = studyData?.Accession;
             return new ScanResult(true, false, currentAccession, studyData, null);
         }
@@ -2316,7 +2386,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // Invalid procedure values that indicate "no study" (matches Python)
-    private static readonly string[] InvalidProcedures = { "n/a", "na", "no report", "" };
+    private static readonly string[] InvalidProcedures = { "n/a", "na", "no report" };
 
     private void ApplyScanResults(ScanResult result)
     {
@@ -2333,427 +2403,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var currentSiteCode = studyData?.SiteCode;
             var currentTime = DateTime.Now;
 
-            // Update Mosaic activity time whenever we see a valid accession
-            // This prevents the inactivity auto-end from firing while the user is actively reading
-            if (!string.IsNullOrEmpty(currentAccession))
-            {
-                _lastMosaicActivityTime = currentTime;
-            }
-
-            // Store patient name, site code, MRN, and original accession in memory (never persisted to DB)
-            if (!string.IsNullOrEmpty(currentAccession))
-            {
-                var hashedAccession = _dataManager.HashAccession(currentAccession);
-                var currentMrn = studyData?.Mrn;
-                lock (_patientInfoCacheLock)
-                {
-                    // Store original accession for Clario lookup
-                    _originalAccessionCache[hashedAccession] = currentAccession;
-
-                    if (!string.IsNullOrEmpty(currentPatientName))
-                    {
-                        _patientNameCache[hashedAccession] = currentPatientName;
-                    }
-                    if (!string.IsNullOrEmpty(currentSiteCode))
-                    {
-                        _siteCodeCache[hashedAccession] = currentSiteCode;
-                    }
-                    if (!string.IsNullOrEmpty(currentMrn))
-                    {
-                        _mrnCache[hashedAccession] = currentMrn;
-                    }
-                }
-            }
-
-            // Clario patient class enrichment runs asynchronously (PerformClarioEnrichment).
-            // Check the cache here in case Clario already enriched this accession on a prior cycle.
-            if ((currentPatientClass == "Unknown" || string.IsNullOrEmpty(currentPatientClass)) &&
-                !string.IsNullOrEmpty(currentAccession))
-            {
-                lock (_clarioCacheLock)
-                {
-                    if (_clarioPatientClassCache.TryGetValue(currentAccession, out var cachedClass))
-                    {
-                        currentPatientClass = cachedClass;
-                        Log.Debug("Enriched patient class from Clario cache: {PatientClass}", currentPatientClass);
-                    }
-                }
-            }
+            UpdateActivityTracking(currentAccession, currentTime);
+            CachePatientInfo(studyData, currentAccession);
+            currentPatientClass = EnrichPatientClassFromCache(currentAccession, currentPatientClass);
 
             // Check if procedure is "n/a" or similar (matches Python logic)
-            var isProcedureNA = string.IsNullOrWhiteSpace(currentProcedure) ||
-                                InvalidProcedures.Contains(currentProcedure.ToLowerInvariant().Trim());
+            // Only treat as N/A when there's no valid accession — the pipe often sends
+            // a valid accession with null/empty description, which is a real study.
+            var isProcedureNA = string.IsNullOrEmpty(currentAccession) &&
+                                (string.IsNullOrWhiteSpace(currentProcedure) ||
+                                 InvalidProcedures.Contains(currentProcedure.ToLowerInvariant().Trim()));
 
-            // MULTI-ACCESSION HANDLING (Python parity)
-            // Check if multiple accessions are visible simultaneously
             var allAccessions = studyData?.AllAccessions ?? new List<string>();
-            var isMultiAccession = allAccessions.Count > 1;
-
-            if (isMultiAccession && !_isMultiAccessionMode)
-            {
-                // Entering multi-accession mode
-                _isMultiAccessionMode = true;
-                _multiAccessionStartTime = currentTime;
-                _currentMultiAccessionGroup = $"MAG-{currentTime:yyyyMMddHHmmss}";
-                _multiAccessionData.Clear();
-
-                Log.Information("Entering multi-accession mode with {Count} accessions: {Accessions}",
-                    allAccessions.Count, string.Join(", ", allAccessions));
-
-                // Track all accessions with their procedures
-                foreach (var acc in allAccessions)
-                {
-                    if (!_multiAccessionData.ContainsKey(acc))
-                    {
-                        var (studyType, rvu) = StudyMatcher.MatchStudyType(
-                            currentProcedure,
-                            _dataManager.RvuTable,
-                            _dataManager.ClassificationRules);
-
-                        _multiAccessionData[acc] = new MultiAccessionStudy
-                        {
-                            Accession = acc,
-                            Procedure = currentProcedure,
-                            StudyType = studyType,
-                            Rvu = rvu,
-                            FirstSeen = currentTime,
-                            PatientClass = currentPatientClass
-                        };
-                    }
-                }
-            }
-            else if (!isMultiAccession && _isMultiAccessionMode)
-            {
-                // Exiting multi-accession mode - record all tracked studies
-                Log.Information("Exiting multi-accession mode - recording {Count} studies", _multiAccessionData.Count);
-
-                var totalDuration = _multiAccessionStartTime != null
-                    ? (currentTime - _multiAccessionStartTime.Value).TotalSeconds
-                    : 0;
-                var durationPerStudy = _multiAccessionData.Count > 0
-                    ? totalDuration / _multiAccessionData.Count
-                    : 0;
-
-                // Only record if duration meets minimum threshold
-                if (durationPerStudy >= _dataManager.Settings.MinStudySeconds && _multiAccessionData.Count > 0)
-                {
-                    var currentShift = _dataManager.Database.GetCurrentShift();
-
-                    foreach (var kvp in _multiAccessionData)
-                    {
-                        var maStudy = kvp.Value;
-                        var record = new StudyRecord
-                        {
-                            Accession = _dataManager.HashAccession(maStudy.Accession),
-                            Procedure = maStudy.Procedure,
-                            StudyType = maStudy.StudyType,
-                            Rvu = maStudy.Rvu,
-                            Timestamp = maStudy.FirstSeen,
-                            TimeFinished = currentTime,
-                            PatientClass = maStudy.PatientClass,
-                            DurationSeconds = durationPerStudy,
-                            FromMultiAccession = true,
-                            MultiAccessionGroup = _currentMultiAccessionGroup,
-                            AccessionCount = _multiAccessionData.Count,
-                            Source = "Mosaic"
-                        };
-
-                        if (currentShift != null && IsShiftActive)
-                        {
-                            // Check for duplicates
-                            var existing = _dataManager.Database.FindRecordByAccession(currentShift.Id, record.Accession);
-                            if (existing == null)
-                            {
-                                try
-                                {
-                                    _dataManager.Database.AddRecord(currentShift.Id, record);
-                                    _studyTracker.MarkSeen(maStudy.Accession);
-                                    Log.Information("Multi-accession record added: {Accession} -> {StudyType} ({Rvu} RVU), duration={Duration:F1}s",
-                                        maStudy.Accession, maStudy.StudyType, maStudy.Rvu, durationPerStudy);
-                                }
-                                catch (Exception ex)
-                                {
-                                    Log.Error(ex, "Failed to add multi-accession record for {Accession} - study will be retried", maStudy.Accession);
-                                }
-                            }
-                        }
-                        else if (!IsShiftActive)
-                        {
-                            // Add to temporary studies
-                            if (!_temporaryStudies.Any(s => s.Accession == record.Accession))
-                            {
-                                _temporaryStudies.Add(record);
-                                Log.Information("Multi-accession temp study: {Accession} -> {StudyType}", maStudy.Accession, maStudy.StudyType);
-                            }
-                        }
-                    }
-
-                    CalculateAndUpdateStats();
-                    StatusMessage = $"Multi: {_multiAccessionData.Count} studies ({_multiAccessionData.Sum(m => m.Value.Rvu):F1} RVU)";
-                }
-                else
-                {
-                    Log.Information("Dropped multi-accession studies - duration too short ({Duration:F1}s < {Min}s threshold)",
-                        durationPerStudy, _dataManager.Settings.MinStudySeconds);
-                }
-
-                // Reset multi-accession state
-                _isMultiAccessionMode = false;
-                _multiAccessionStartTime = null;
-                _currentMultiAccessionGroup = null;
-                _multiAccessionData.Clear();
-
-                // Don't continue normal processing - multi-accession handled separately
-                _lastSeenAccession = "";  // Reset so next single-accession scan starts clean
-                UpdateRecentStudiesDisplay();
+            if (HandleMultiAccession(allAccessions, currentProcedure, currentPatientClass, currentTime))
                 return;
-            }
-            else if (_isMultiAccessionMode && isMultiAccession)
-            {
-                // Still in multi-accession mode - update tracking with any new accessions
-                foreach (var acc in allAccessions)
-                {
-                    if (!_multiAccessionData.ContainsKey(acc))
-                    {
-                        var (studyType, rvu) = StudyMatcher.MatchStudyType(
-                            currentProcedure,
-                            _dataManager.RvuTable,
-                            _dataManager.ClassificationRules);
 
-                        _multiAccessionData[acc] = new MultiAccessionStudy
-                        {
-                            Accession = acc,
-                            Procedure = currentProcedure,
-                            StudyType = studyType,
-                            Rvu = rvu,
-                            FirstSeen = currentTime,
-                            PatientClass = currentPatientClass
-                        };
-
-                        Log.Debug("Added new accession to multi-accession group: {Accession}", acc);
-                    }
-                }
-
-                // Update current study display for multi-accession mode
-                CurrentAccession = $"{allAccessions.Count} studies";
-                CurrentProcedure = currentProcedure;
-                CurrentPatientClass = currentPatientClass;
-                CurrentStudyType = "Multiple";
-                CurrentStudyRvu = _multiAccessionData.Sum(m => m.Value.Rvu);
-                CurrentDuration = _multiAccessionStartTime != null
-                    ? FormatDurationWithAvg((currentTime - _multiAccessionStartTime.Value).TotalSeconds, "Multiple")
-                    : "";
-                IsCurrentStudyAlreadyRecorded = false;
-                CurrentAccessionDisplay = $"Multi: {allAccessions.Count}";
-                CurrentAccessionColor = System.Windows.Media.Brushes.Orange;
-
-                _lastSeenAccession = string.Join(",", allAccessions);
-                return;  // Don't continue normal single-accession processing
-            }
-
-            // STEP 1: Check for completed studies (Python-like logic)
-            // Study is completed when:
-            // 1. Current accession is different from what we were tracking, OR
-            // 2. No accession is visible (study closed), OR
-            // 3. Procedure changed to "n/a" (matches Python - complete all active studies)
-            List<TrackedStudy> completedStudies;
-            if (isProcedureNA && _studyTracker.TrackedCount > 0)
-            {
-                // Procedure is n/a - complete all active studies (Python behavior)
-                Log.Information("Procedure is N/A - completing all {Count} active studies", _studyTracker.TrackedCount);
-                completedStudies = _studyTracker.CheckCompleted(currentTime, "");
-            }
-            else
-            {
-                completedStudies = _studyTracker.CheckCompleted(currentTime, currentAccession);
-            }
-
-            // STEP 2: Process completed studies - add to database
-            var shift = _dataManager.Database.GetCurrentShift();
-            foreach (var completed in completedStudies)
-            {
-                // Study should already have study type and RVU from when it was added
-                // But re-classify in case procedure was updated
-                var (studyType, rvu) = StudyMatcher.MatchStudyType(
-                    completed.Procedure,
-                    _dataManager.RvuTable,
-                    _dataManager.ClassificationRules);
-
-                // Use the better values (prefer non-Unknown)
-                if (studyType == "Unknown" && completed.StudyType != "Unknown")
-                    studyType = completed.StudyType;
-                if (rvu == 0 && completed.Rvu > 0)
-                    rvu = completed.Rvu;
-
-                // Enrich patient class from Clario cache if Unknown (like Python)
-                var patientClassToRecord = completed.PatientClass;
-                if (string.IsNullOrEmpty(patientClassToRecord) || patientClassToRecord == "Unknown")
-                {
-                    lock (_clarioCacheLock)
-                    {
-                        if (_clarioPatientClassCache.TryGetValue(completed.Accession, out var cachedClass))
-                        {
-                            patientClassToRecord = cachedClass;
-                            Log.Debug("Enriched completed study with cached Clario patient class: {PatientClass}", cachedClass);
-                        }
-                    }
-                }
-
-                var record = new StudyRecord
-                {
-                    Accession = _dataManager.HashAccession(completed.Accession),
-                    Procedure = completed.Procedure,
-                    StudyType = studyType,
-                    Rvu = rvu,
-                    Timestamp = completed.FirstSeen,  // When study was started
-                    TimeFinished = completed.CompletedAt ?? currentTime,  // When study was completed
-                    PatientClass = patientClassToRecord ?? "Unknown",
-                    DurationSeconds = completed.Duration,
-                    Source = "Mosaic"
-                };
-
-                if (shift != null && IsShiftActive)
-                {
-                    // Check if already exists in active shift
-                    var existing = _dataManager.Database.FindRecordByAccession(shift.Id, record.Accession);
-                    if (existing != null)
-                    {
-                        // Update duration and time_finished if higher (Python behavior)
-                        if (record.DurationSeconds > (existing.DurationSeconds ?? 0))
-                        {
-                            existing.DurationSeconds = record.DurationSeconds;
-                            existing.TimeFinished = record.TimeFinished;  // Also update time_finished
-                            _dataManager.Database.UpdateRecord(existing);
-                            Log.Information("Updated study duration: {Accession} -> {Duration:F1}s",
-                                completed.Accession, record.DurationSeconds);
-                        }
-                        continue;
-                    }
-
-                    // Route to pending queue if pipe connected, otherwise direct add
-                    if (IsPipeConnected)
-                    {
-                        AddToPendingQueue(record, completed.Accession);
-                    }
-                    else
-                    {
-                        // Direct add to database (no MosaicTools pipe)
-                        try
-                        {
-                            _dataManager.Database.AddRecord(shift.Id, record);
-                            _studyTracker.MarkSeen(completed.Accession);
-
-                            // Record for fatigue detection
-                            if (completed.Duration > 0)
-                                _fatigueDetector.RecordStudy(DateTime.Now, completed.Duration);
-
-                            StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
-                            Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU), Duration: {Duration:F1}s",
-                                completed.Accession, studyType, rvu, completed.Duration);
-
-                            CalculateAndUpdateStats();
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Error(ex, "Failed to add record for {Accession} - study will be retried", completed.Accession);
-                        }
-                    }
-                }
-                else
-                {
-                    // No active shift - route through pending queue if pipe connected
-                    if (IsPipeConnected)
-                    {
-                        AddToPendingQueue(record, completed.Accession);
-                    }
-                    else
-                    {
-                        // Direct add to temporary studies
-                        if (!_temporaryStudies.Any(s => s.Accession == record.Accession))
-                        {
-                            _temporaryStudies.Add(record);
-                            StatusMessage = $"Temp: {studyType} ({rvu:F1} RVU) - No shift active";
-                            Log.Information("Added temporary study (no shift): {Accession} -> {StudyType} ({Rvu} RVU)",
-                                completed.Accession, studyType, rvu);
-
-                            UpdateRecentStudiesDisplay();
-                        }
-                    }
-                }
-            }
-
-            // STEP 3: Update current study display
-            if (!string.IsNullOrEmpty(currentAccession))
-            {
-                CurrentAccession = currentAccession;
-                CurrentProcedure = !string.IsNullOrEmpty(currentProcedure) ? currentProcedure : "-";
-                CurrentPatientClass = currentPatientClass;
-                CurrentPatientName = currentPatientName ?? "";
-                CurrentSiteCode = currentSiteCode ?? "";
-
-                // Check if study is already recorded (like Python's "already recorded" display)
-                // Using 'shift' from STEP 2 above
-                var hashedAccession = _dataManager.HashAccession(currentAccession);
-                var existingRecord = shift != null
-                    ? _dataManager.Database.FindRecordByAccession(shift.Id, hashedAccession)
-                    : null;
-                IsCurrentStudyAlreadyRecorded = existingRecord != null;
-                CurrentAccessionDisplay = IsCurrentStudyAlreadyRecorded ? "already recorded" : currentAccession;
-                // Red (#C62828) for "already recorded", gray otherwise (like Python)
-                CurrentAccessionColor = IsCurrentStudyAlreadyRecorded
-                    ? AlreadyRecordedBrush
-                    : Brushes.Gray;
-
-                // Match study type for display
-                var (studyType, rvu) = StudyMatcher.MatchStudyType(
-                    currentProcedure,
-                    _dataManager.RvuTable,
-                    _dataManager.ClassificationRules);
-                CurrentStudyType = studyType;
-                CurrentStudyRvu = rvu;
-
-                // STEP 4: Add/update current study in tracker
-                // Always add when we have a valid accession, even with empty procedure.
-                // The tracker's AddStudy() handles updating procedure on subsequent cycles.
-                // Only skip when procedure is explicitly N/A (which triggers completion above).
-                if (!isProcedureNA)
-                {
-                    _studyTracker.AddStudy(
-                        currentAccession,
-                        currentProcedure,  // may be empty - tracker handles updates later
-                        currentTime,
-                        _dataManager.RvuTable,
-                        _dataManager.ClassificationRules,
-                        currentPatientClass);
-
-                    // Update tracker duration display
-                    var trackedStudy = _studyTracker.GetStudy(currentAccession);
-                    if (trackedStudy != null)
-                    {
-                        CurrentDuration = FormatDurationWithAvg(trackedStudy.TrackedSeconds, CurrentStudyType);
-
-                        // Check if study has been open too long → send distraction alert
-                        CheckDistractionAlert(currentAccession, CurrentStudyType, trackedStudy.TrackedSeconds);
-                    }
-                    else
-                    {
-                        CurrentDuration = "";
-                    }
-                }
-                else
-                {
-                    // Procedure is n/a - don't track, clear duration
-                    CurrentDuration = "";
-                }
-
-                _lastSeenAccession = currentAccession;
-            }
-            else
-            {
-                // No current study visible
-                ClearCurrentStudy();
-                _lastSeenAccession = "";
-            }
+            DetectAndRecordCompletedStudies(currentAccession, currentProcedure, currentPatientClass, isProcedureNA, currentTime);
+            UpdateCurrentStudyDisplay(currentAccession, currentProcedure, currentPatientClass, currentPatientName, currentSiteCode, isProcedureNA, currentTime);
         }
         else if (result.IsClarioRunning)
         {
@@ -2769,6 +2435,443 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // When no source detected, complete any active studies
             var completedStudies = _studyTracker.CheckCompleted(DateTime.Now, "");
             ProcessCompletedStudies(completedStudies);
+            _lastSeenAccession = "";
+        }
+    }
+
+    private void UpdateActivityTracking(string accession, DateTime currentTime)
+    {
+        if (!string.IsNullOrEmpty(accession))
+        {
+            _lastMosaicActivityTime = currentTime;
+        }
+    }
+
+    private void CachePatientInfo(Utils.MosaicStudyData? studyData, string accession)
+    {
+        if (string.IsNullOrEmpty(accession)) return;
+
+        var hashedAccession = _dataManager.HashAccession(accession);
+        var currentMrn = studyData?.Mrn;
+        lock (_patientInfoCacheLock)
+        {
+            // Store original accession for Clario lookup
+            _originalAccessionCache[hashedAccession] = accession;
+
+            if (!string.IsNullOrEmpty(studyData?.PatientName))
+            {
+                _patientNameCache[hashedAccession] = studyData.PatientName;
+            }
+            if (!string.IsNullOrEmpty(studyData?.SiteCode))
+            {
+                _siteCodeCache[hashedAccession] = studyData.SiteCode;
+            }
+            if (!string.IsNullOrEmpty(currentMrn))
+            {
+                _mrnCache[hashedAccession] = currentMrn;
+            }
+        }
+    }
+
+    private string EnrichPatientClassFromCache(string accession, string patientClass)
+    {
+        if ((patientClass == "Unknown" || string.IsNullOrEmpty(patientClass)) &&
+            !string.IsNullOrEmpty(accession))
+        {
+            lock (_clarioCacheLock)
+            {
+                if (_clarioPatientClassCache.TryGetValue(accession, out var cachedClass))
+                {
+                    patientClass = cachedClass;
+                    Log.Debug("Enriched patient class from Clario cache: {PatientClass}", patientClass);
+                }
+            }
+        }
+        return patientClass;
+    }
+
+    /// <summary>
+    /// Handles multi-accession enter/exit/continue logic.
+    /// Returns true if the event was consumed (caller should return).
+    /// Returns false to fall through to single-accession processing.
+    /// </summary>
+    private bool HandleMultiAccession(List<string> allAccessions, string procedure, string patientClass, DateTime currentTime)
+    {
+        var isMultiAccession = allAccessions.Count > 1;
+
+        if (isMultiAccession && !_isMultiAccessionMode)
+        {
+            // Entering multi-accession mode
+            _isMultiAccessionMode = true;
+            _multiAccessionStartTime = currentTime;
+            _currentMultiAccessionGroup = $"MAG-{currentTime:yyyyMMddHHmmss}";
+            _multiAccessionData.Clear();
+
+            Log.Information("Entering multi-accession mode with {Count} accessions: {Accessions}",
+                allAccessions.Count, string.Join(", ", allAccessions));
+
+            // Track all accessions with their procedures
+            foreach (var acc in allAccessions)
+            {
+                if (!_multiAccessionData.ContainsKey(acc))
+                {
+                    var (studyType, rvu) = StudyMatcher.MatchStudyType(
+                        procedure,
+                        _dataManager.RvuTable,
+                        _dataManager.ClassificationRules);
+
+                    _multiAccessionData[acc] = new MultiAccessionStudy
+                    {
+                        Accession = acc,
+                        Procedure = procedure,
+                        StudyType = studyType,
+                        Rvu = rvu,
+                        FirstSeen = currentTime,
+                        PatientClass = patientClass
+                    };
+                }
+            }
+
+            return false; // Fall through to single-accession processing
+        }
+        else if (!isMultiAccession && _isMultiAccessionMode)
+        {
+            // Exiting multi-accession mode - record all tracked studies
+            Log.Information("Exiting multi-accession mode - recording {Count} studies", _multiAccessionData.Count);
+
+            var totalDuration = _multiAccessionStartTime != null
+                ? (currentTime - _multiAccessionStartTime.Value).TotalSeconds
+                : 0;
+            var durationPerStudy = _multiAccessionData.Count > 0
+                ? totalDuration / _multiAccessionData.Count
+                : 0;
+
+            // Only record if duration meets minimum threshold
+            if (durationPerStudy >= _dataManager.Settings.MinStudySeconds && _multiAccessionData.Count > 0)
+            {
+                var currentShift = _dataManager.Database.GetCurrentShift();
+
+                foreach (var kvp in _multiAccessionData)
+                {
+                    var maStudy = kvp.Value;
+                    var record = new StudyRecord
+                    {
+                        Accession = _dataManager.HashAccession(maStudy.Accession),
+                        Procedure = maStudy.Procedure,
+                        StudyType = maStudy.StudyType,
+                        Rvu = maStudy.Rvu,
+                        Timestamp = maStudy.FirstSeen,
+                        TimeFinished = currentTime,
+                        PatientClass = maStudy.PatientClass,
+                        DurationSeconds = durationPerStudy,
+                        FromMultiAccession = true,
+                        MultiAccessionGroup = _currentMultiAccessionGroup,
+                        AccessionCount = _multiAccessionData.Count,
+                        Source = "Mosaic"
+                    };
+
+                    if (currentShift != null && IsShiftActive)
+                    {
+                        // Check for duplicates
+                        var existing = _dataManager.Database.FindRecordByAccession(currentShift.Id, record.Accession);
+                        if (existing == null)
+                        {
+                            try
+                            {
+                                _dataManager.Database.AddRecord(currentShift.Id, record);
+                                _studyTracker.MarkSeen(maStudy.Accession);
+                                Log.Information("Multi-accession record added: {Accession} -> {StudyType} ({Rvu} RVU), duration={Duration:F1}s",
+                                    maStudy.Accession, maStudy.StudyType, maStudy.Rvu, durationPerStudy);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, "Failed to add multi-accession record for {Accession} - study will be retried", maStudy.Accession);
+                            }
+                        }
+                    }
+                    else if (!IsShiftActive)
+                    {
+                        // Add to temporary studies
+                        if (!_temporaryStudies.Any(s => s.Accession == record.Accession))
+                        {
+                            _temporaryStudies.Add(record);
+                            Log.Information("Multi-accession temp study: {Accession} -> {StudyType}", maStudy.Accession, maStudy.StudyType);
+                        }
+                    }
+                }
+
+                CalculateAndUpdateStats();
+                StatusMessage = $"Multi: {_multiAccessionData.Count} studies ({_multiAccessionData.Sum(m => m.Value.Rvu):F1} RVU)";
+            }
+            else
+            {
+                Log.Information("Dropped multi-accession studies - duration too short ({Duration:F1}s < {Min}s threshold)",
+                    durationPerStudy, _dataManager.Settings.MinStudySeconds);
+            }
+
+            // Reset multi-accession state
+            _isMultiAccessionMode = false;
+            _multiAccessionStartTime = null;
+            _currentMultiAccessionGroup = null;
+            _multiAccessionData.Clear();
+
+            // Don't continue normal processing - multi-accession handled separately
+            _lastSeenAccession = "";  // Reset so next single-accession scan starts clean
+            UpdateRecentStudiesDisplay();
+            return true; // Consumed
+        }
+        else if (_isMultiAccessionMode && isMultiAccession)
+        {
+            // Still in multi-accession mode - update tracking with any new accessions
+            foreach (var acc in allAccessions)
+            {
+                if (!_multiAccessionData.ContainsKey(acc))
+                {
+                    var (studyType, rvu) = StudyMatcher.MatchStudyType(
+                        procedure,
+                        _dataManager.RvuTable,
+                        _dataManager.ClassificationRules);
+
+                    _multiAccessionData[acc] = new MultiAccessionStudy
+                    {
+                        Accession = acc,
+                        Procedure = procedure,
+                        StudyType = studyType,
+                        Rvu = rvu,
+                        FirstSeen = currentTime,
+                        PatientClass = patientClass
+                    };
+
+                    Log.Debug("Added new accession to multi-accession group: {Accession}", acc);
+                }
+            }
+
+            // Update current study display for multi-accession mode
+            CurrentAccession = $"{allAccessions.Count} studies";
+            CurrentProcedure = procedure;
+            CurrentPatientClass = patientClass;
+            CurrentStudyType = "Multiple";
+            CurrentStudyRvu = _multiAccessionData.Sum(m => m.Value.Rvu);
+            CurrentDuration = _multiAccessionStartTime != null
+                ? FormatDurationWithAvg((currentTime - _multiAccessionStartTime.Value).TotalSeconds, "Multiple")
+                : "";
+            IsCurrentStudyAlreadyRecorded = false;
+            CurrentAccessionDisplay = $"Multi: {allAccessions.Count}";
+            CurrentAccessionColor = System.Windows.Media.Brushes.Orange;
+
+            _lastSeenAccession = string.Join(",", allAccessions);
+            return true;  // Don't continue normal single-accession processing
+        }
+
+        return false; // Not in multi-accession mode
+    }
+
+    private void DetectAndRecordCompletedStudies(string accession, string procedure, string patientClass, bool isProcedureNA, DateTime currentTime)
+    {
+        // Check for completed studies (Python-like logic)
+        // Study is completed when:
+        // 1. Current accession is different from what we were tracking, OR
+        // 2. No accession is visible (study closed), OR
+        // 3. Procedure changed to "n/a" (matches Python - complete all active studies)
+        List<TrackedStudy> completedStudies;
+        if (isProcedureNA && _studyTracker.TrackedCount > 0)
+        {
+            // Procedure is n/a - complete all active studies (Python behavior)
+            Log.Information("Procedure is N/A - completing all {Count} active studies", _studyTracker.TrackedCount);
+            completedStudies = _studyTracker.CheckCompleted(currentTime, "");
+        }
+        else
+        {
+            completedStudies = _studyTracker.CheckCompleted(currentTime, accession);
+        }
+
+        // Process completed studies - add to database
+        var shift = _dataManager.Database.GetCurrentShift();
+        foreach (var completed in completedStudies)
+        {
+            // Study should already have study type and RVU from when it was added
+            // But re-classify in case procedure was updated
+            var (studyType, rvu) = StudyMatcher.MatchStudyType(
+                completed.Procedure,
+                _dataManager.RvuTable,
+                _dataManager.ClassificationRules);
+
+            // Use the better values (prefer non-Unknown)
+            if (studyType == "Unknown" && completed.StudyType != "Unknown")
+                studyType = completed.StudyType;
+            if (rvu == 0 && completed.Rvu > 0)
+                rvu = completed.Rvu;
+
+            // Enrich patient class from Clario cache if Unknown (like Python)
+            var patientClassToRecord = completed.PatientClass;
+            if (string.IsNullOrEmpty(patientClassToRecord) || patientClassToRecord == "Unknown")
+            {
+                lock (_clarioCacheLock)
+                {
+                    if (_clarioPatientClassCache.TryGetValue(completed.Accession, out var cachedClass))
+                    {
+                        patientClassToRecord = cachedClass;
+                        Log.Debug("Enriched completed study with cached Clario patient class: {PatientClass}", cachedClass);
+                    }
+                }
+            }
+
+            var record = new StudyRecord
+            {
+                Accession = _dataManager.HashAccession(completed.Accession),
+                Procedure = completed.Procedure,
+                StudyType = studyType,
+                Rvu = rvu,
+                Timestamp = completed.FirstSeen,  // When study was started
+                TimeFinished = completed.CompletedAt ?? currentTime,  // When study was completed
+                PatientClass = patientClassToRecord ?? "Unknown",
+                DurationSeconds = completed.Duration,
+                Source = "Mosaic"
+            };
+
+            if (shift != null && IsShiftActive)
+            {
+                // Check if already exists in active shift
+                var existing = _dataManager.Database.FindRecordByAccession(shift.Id, record.Accession);
+                if (existing != null)
+                {
+                    // Update duration and time_finished if higher (Python behavior)
+                    if (record.DurationSeconds > (existing.DurationSeconds ?? 0))
+                    {
+                        existing.DurationSeconds = record.DurationSeconds;
+                        existing.TimeFinished = record.TimeFinished;  // Also update time_finished
+                        _dataManager.Database.UpdateRecord(existing);
+                        Log.Information("Updated study duration: {Accession} -> {Duration:F1}s",
+                            completed.Accession, record.DurationSeconds);
+                    }
+                    continue;
+                }
+
+                // Route to pending queue if pipe connected, otherwise direct add
+                if (IsPipeConnected)
+                {
+                    AddToPendingQueue(record, completed.Accession);
+                }
+                else
+                {
+                    // Direct add to database (no MosaicTools pipe)
+                    try
+                    {
+                        _dataManager.Database.AddRecord(shift.Id, record);
+                        _studyTracker.MarkSeen(completed.Accession);
+
+                        // Record for fatigue detection
+                        if (completed.Duration > 0)
+                            _fatigueDetector.RecordStudy(DateTime.Now, completed.Duration);
+
+                        StatusMessage = $"Counted: {studyType} ({rvu:F1} RVU)";
+                        Log.Information("Auto-counted study: {Accession} -> {StudyType} ({Rvu} RVU), Duration: {Duration:F1}s",
+                            completed.Accession, studyType, rvu, completed.Duration);
+
+                        CalculateAndUpdateStats();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Failed to add record for {Accession} - study will be retried", completed.Accession);
+                    }
+                }
+            }
+            else
+            {
+                // No active shift - route through pending queue if pipe connected
+                if (IsPipeConnected)
+                {
+                    AddToPendingQueue(record, completed.Accession);
+                }
+                else
+                {
+                    // Direct add to temporary studies
+                    if (!_temporaryStudies.Any(s => s.Accession == record.Accession))
+                    {
+                        _temporaryStudies.Add(record);
+                        StatusMessage = $"Temp: {studyType} ({rvu:F1} RVU) - No shift active";
+                        Log.Information("Added temporary study (no shift): {Accession} -> {StudyType} ({Rvu} RVU)",
+                            completed.Accession, studyType, rvu);
+
+                        UpdateRecentStudiesDisplay();
+                    }
+                }
+            }
+        }
+    }
+
+    private void UpdateCurrentStudyDisplay(string accession, string procedure, string patientClass,
+        string? patientName, string? siteCode, bool isProcedureNA, DateTime currentTime)
+    {
+        if (!string.IsNullOrEmpty(accession))
+        {
+            CurrentAccession = accession;
+            CurrentProcedure = !string.IsNullOrEmpty(procedure) ? procedure : "-";
+            CurrentPatientClass = patientClass;
+            CurrentPatientName = patientName ?? "";
+            CurrentSiteCode = siteCode ?? "";
+
+            // Check if study is already recorded (like Python's "already recorded" display)
+            var hashedAccession = _dataManager.HashAccession(accession);
+            var shift = _dataManager.Database.GetCurrentShift();
+            var existingRecord = shift != null
+                ? _dataManager.Database.FindRecordByAccession(shift.Id, hashedAccession)
+                : null;
+            IsCurrentStudyAlreadyRecorded = existingRecord != null;
+            CurrentAccessionDisplay = IsCurrentStudyAlreadyRecorded ? "already recorded" : accession;
+            // Red (#C62828) for "already recorded", gray otherwise (like Python)
+            CurrentAccessionColor = IsCurrentStudyAlreadyRecorded
+                ? AlreadyRecordedBrush
+                : Brushes.Gray;
+
+            // Match study type for display
+            var (studyType, rvu) = StudyMatcher.MatchStudyType(
+                procedure,
+                _dataManager.RvuTable,
+                _dataManager.ClassificationRules);
+            CurrentStudyType = studyType;
+            CurrentStudyRvu = rvu;
+
+            // Add/update current study in tracker
+            // Always add when we have a valid accession, even with empty procedure.
+            // The tracker's AddStudy() handles updating procedure on subsequent cycles.
+            // Only skip when procedure is explicitly N/A (which triggers completion above).
+            if (!isProcedureNA)
+            {
+                _studyTracker.AddStudy(
+                    accession,
+                    procedure,  // may be empty - tracker handles updates later
+                    currentTime,
+                    _dataManager.RvuTable,
+                    _dataManager.ClassificationRules,
+                    patientClass);
+
+                // Update tracker duration display
+                var trackedStudy = _studyTracker.GetStudy(accession);
+                if (trackedStudy != null)
+                {
+                    CurrentDuration = FormatDurationWithAvg(trackedStudy.TrackedSeconds, CurrentStudyType);
+
+                    // Check if study has been open too long → send distraction alert
+                    CheckDistractionAlert(accession, CurrentStudyType, trackedStudy.TrackedSeconds);
+                }
+                else
+                {
+                    CurrentDuration = "";
+                }
+            }
+            else
+            {
+                // Procedure is n/a - don't track, clear duration
+                CurrentDuration = "";
+            }
+
+            _lastSeenAccession = accession;
+        }
+        else
+        {
+            // No current study visible
+            ClearCurrentStudy();
             _lastSeenAccession = "";
         }
     }

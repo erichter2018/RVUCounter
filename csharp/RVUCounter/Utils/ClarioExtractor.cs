@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using Serilog;
@@ -55,8 +56,12 @@ public static class ClarioExtractor
                 catch
                 {
                     Log.Debug("Clario cache validation failed, clearing cache");
-                    _cachedChromeWindow = null;
+                    var oldContent = _cachedContentArea;
+                    var oldWindow = _cachedChromeWindow;
                     _cachedContentArea = null;
+                    _cachedChromeWindow = null;
+                    WindowExtraction.ReleaseElement(oldContent);
+                    WindowExtraction.ReleaseElement(oldWindow);
                 }
             }
         }
@@ -64,20 +69,21 @@ public static class ClarioExtractor
         try
         {
             var automation = WindowExtraction.GetAutomation();
-            var desktop = automation.GetDesktop();
+            var desktop = WindowExtraction.GetDesktop();
             var cf = automation.ConditionFactory;
 
             AutomationElement[]? windows = null;
             AutomationElement? found = null;
             try
             {
+                // No CacheRequest — cached property reads return empty for some windows.
                 windows = desktop.FindAllChildren(cf.ByControlType(ControlType.Window));
 
                 foreach (var window in windows)
                 {
                     try
                     {
-                        var title = window.Name?.ToLowerInvariant() ?? "";
+                        var title = (window.Properties.Name.ValueOrDefault ?? "").ToLowerInvariant();
 
                         // Exclude test/viewer windows and RVU Counter
                         if (title.Contains("rvu counter") ||
@@ -92,15 +98,18 @@ public static class ClarioExtractor
                         // Look for Chrome window with "clario" and "worklist" in title
                         if (title.Contains("clario") && title.Contains("worklist"))
                         {
-                            Log.Debug("Found Clario window: '{Title}'", window.Name);
+                            Log.Debug("Found Clario window: '{Title}'", title);
                             try
                             {
-                                var className = window.Properties.ClassName.ValueOrDefault?.ToLowerInvariant() ?? "";
+                                var className = (window.Properties.ClassName.ValueOrDefault ?? "").ToLowerInvariant();
                                 if (className.Contains("chrome"))
                                 {
                                     lock (_cacheLock)
                                     {
+                                        var old = _cachedChromeWindow;
                                         _cachedChromeWindow = window;
+                                        if (old != null && !ReferenceEquals(old, window))
+                                            WindowExtraction.ReleaseElement(old);
                                     }
                                     found = window;
                                     return found;
@@ -112,7 +121,10 @@ public static class ClarioExtractor
                                 Log.Debug(ex, "Could not check class name for Clario window, using title match");
                                 lock (_cacheLock)
                                 {
+                                    var old = _cachedChromeWindow;
                                     _cachedChromeWindow = window;
+                                    if (old != null && !ReferenceEquals(old, window))
+                                        WindowExtraction.ReleaseElement(old);
                                 }
                                 found = window;
                                 return found;
@@ -141,8 +153,12 @@ public static class ClarioExtractor
         // Window not found — clear both caches so stale references don't linger
         lock (_cacheLock)
         {
-            _cachedChromeWindow = null;
+            var oldContent = _cachedContentArea;
+            var oldWindow = _cachedChromeWindow;
             _cachedContentArea = null;
+            _cachedChromeWindow = null;
+            WindowExtraction.ReleaseElement(oldContent);
+            WindowExtraction.ReleaseElement(oldWindow);
         }
         return null;
     }
@@ -167,7 +183,9 @@ public static class ClarioExtractor
                 }
                 catch
                 {
+                    var old = _cachedContentArea;
                     _cachedContentArea = null;
+                    WindowExtraction.ReleaseElement(old);
                 }
             }
         }
@@ -192,7 +210,10 @@ public static class ClarioExtractor
                         {
                             lock (_cacheLock)
                             {
+                                var old = _cachedContentArea;
                                 _cachedContentArea = child;
+                                if (old != null && !ReferenceEquals(old, child))
+                                    WindowExtraction.ReleaseElement(old);
                             }
                             found = child;
                             return found;
@@ -217,7 +238,10 @@ public static class ClarioExtractor
                     {
                         lock (_cacheLock)
                         {
+                            var old = _cachedContentArea;
                             _cachedContentArea = child;
+                            if (old != null && !ReferenceEquals(old, child))
+                                WindowExtraction.ReleaseElement(old);
                         }
                         found = child;
                         return found;
@@ -245,7 +269,10 @@ public static class ClarioExtractor
         // Last resort: return the window itself
         lock (_cacheLock)
         {
+            var old = _cachedContentArea;
             _cachedContentArea = chromeWindow;
+            if (old != null && !ReferenceEquals(old, chromeWindow))
+                WindowExtraction.ReleaseElement(old);
         }
         return chromeWindow;
     }
@@ -446,7 +473,7 @@ public static class ClarioExtractor
             if (elements.Count >= maxElements || stopwatch.ElapsedMilliseconds >= timeoutMs)
                 return;
 
-            // Recursively get children
+            // Recursively get children — no CacheRequest so elements get full live COM references.
             AutomationElement[]? children = null;
             try
             {
@@ -785,14 +812,19 @@ public static class ClarioExtractor
     }
 
     /// <summary>
-    /// Clear the Clario window cache.
+    /// Clear the Clario window cache, releasing old COM elements.
     /// </summary>
     public static void ClearCache()
     {
         lock (_cacheLock)
         {
-            _cachedChromeWindow = null;
+            var oldContent = _cachedContentArea;
+            var oldWindow = _cachedChromeWindow;
             _cachedContentArea = null;
+            _cachedChromeWindow = null;
+            // Release deepest first
+            WindowExtraction.ReleaseElement(oldContent);
+            WindowExtraction.ReleaseElement(oldWindow);
         }
     }
 

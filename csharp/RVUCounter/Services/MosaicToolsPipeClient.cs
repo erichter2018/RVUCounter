@@ -177,7 +177,8 @@ public sealed class MosaicToolsPipeClient : IDisposable
             // Disconnected - clean up and retry
             DisconnectPipe();
             ConnectionStateChanged?.Invoke(false);
-            LatestStudyData = null;
+            // Keep LatestStudyData intact — MainViewModel uses it to bridge
+            // the gap during MosaicTools restart (prevents premature study completion).
 
             if (!ct.IsCancellationRequested)
             {

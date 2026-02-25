@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
+using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 using FlaUI.UIA3.Converters;
 using Serilog;
@@ -15,8 +16,15 @@ namespace RVUCounter.Utils;
 public static class WindowExtraction
 {
     private static UIA3Automation? _automation;
+    private static AutomationElement? _cachedDesktop;
     private static readonly object _lock = new();
     private static int _consecutiveComFailures;
+    private static int _uiaCallCount;
+    private static long _lastUiaResetTick64;
+    private static long _lastHeartbeatTick64;
+    private const long UiaResetIntervalMs = 300_000; // 5 minutes
+    private const int UiaResetCallThreshold = 100;
+    private const long HeartbeatIntervalMs = 60_000; // 1 minute
     private static readonly System.Text.RegularExpressions.Regex DatePatternRegex =
         new(@"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", System.Text.RegularExpressions.RegexOptions.Compiled);
 
@@ -27,7 +35,7 @@ public static class WindowExtraction
     {
         lock (_lock)
         {
-            _automation ??= new UIA3Automation();
+            _automation ??= Task.Run(() => new UIA3Automation()).GetAwaiter().GetResult();
             return _automation;
         }
     }
@@ -42,6 +50,11 @@ public static class WindowExtraction
         {
             Log.Warning("Recreating UIA3 automation instance after {Failures} consecutive COM failures",
                 _consecutiveComFailures);
+
+            ReleaseElement(_cachedDesktop);
+            _cachedDesktop = null;
+            ClarioExtractor.ClearCache();
+
             try
             {
                 _automation?.Dispose();
@@ -50,8 +63,10 @@ public static class WindowExtraction
             {
                 Log.Debug(ex, "Error disposing old UIA3 automation instance");
             }
-            _automation = new UIA3Automation();
+            _automation = Task.Run(() => new UIA3Automation()).GetAwaiter().GetResult();
             _consecutiveComFailures = 0;
+            _lastUiaResetTick64 = Environment.TickCount64;
+            Interlocked.Exchange(ref _uiaCallCount, 0);
         }
     }
 
@@ -77,11 +92,90 @@ public static class WindowExtraction
     }
 
     /// <summary>
-    /// Get the desktop element (cached for performance).
+    /// Get the desktop element, cached to avoid creating a new COM wrapper each call.
     /// </summary>
     public static AutomationElement GetDesktop()
     {
-        return GetAutomation().GetDesktop();
+        var desktop = _cachedDesktop;
+        if (desktop != null)
+        {
+            try
+            {
+                _ = desktop.Properties.ProcessId.ValueOrDefault;
+                return desktop;
+            }
+            catch
+            {
+                _cachedDesktop = null;
+            }
+        }
+        desktop = GetAutomation().GetDesktop();
+        _cachedDesktop = desktop;
+        return desktop;
+    }
+
+    /// <summary>
+    /// Periodic UIA connection reset to combat Chrome's ever-growing accessibility tree.
+    /// Call at the top of scrape timer callbacks.
+    /// </summary>
+    public static void ResetUiaConnectionIfNeeded()
+    {
+        Interlocked.Increment(ref _uiaCallCount);
+
+        long now = Environment.TickCount64;
+        long elapsed = now - _lastUiaResetTick64;
+        if (elapsed < UiaResetIntervalMs || _uiaCallCount < UiaResetCallThreshold)
+        {
+            LogHeartbeatIfNeeded(now);
+            return;
+        }
+
+        lock (_lock)
+        {
+            var callsSinceReset = Interlocked.Exchange(ref _uiaCallCount, 0);
+            Log.Information("Periodic UIA reset ({Calls} calls since last reset)", callsSinceReset);
+
+            // Release all cached elements before disposing automation
+            ReleaseElement(_cachedDesktop);
+            _cachedDesktop = null;
+            ClarioExtractor.ClearCache();
+
+            // Force GC to release remaining COM wrappers before disposing
+            GC.Collect(2, GCCollectionMode.Forced);
+            GC.WaitForPendingFinalizers();
+
+            try { _automation?.Dispose(); } catch { }
+            _automation = Task.Run(() => new UIA3Automation()).GetAwaiter().GetResult();
+
+            _lastUiaResetTick64 = Environment.TickCount64;
+            Log.Information("UIA reset complete");
+        }
+    }
+
+    /// <summary>
+    /// Log periodic heartbeat with memory/handle stats for diagnosing degradation.
+    /// </summary>
+    private static void LogHeartbeatIfNeeded(long now)
+    {
+        if (now - _lastHeartbeatTick64 < HeartbeatIntervalMs)
+            return;
+        _lastHeartbeatTick64 = now;
+
+        try
+        {
+            var proc = System.Diagnostics.Process.GetCurrentProcess();
+            Log.Debug("UIA heartbeat: managed={ManagedMB}MB, workingSet={WsMB}MB, " +
+                "private={PrivMB}MB, handles={Handles}, threads={Threads}, " +
+                "GC={G0}/{G1}/{G2}, uiaCalls={UiaCalls}",
+                GC.GetTotalMemory(false) / 1024 / 1024,
+                proc.WorkingSet64 / 1024 / 1024,
+                proc.PrivateMemorySize64 / 1024 / 1024,
+                proc.HandleCount,
+                proc.Threads.Count,
+                GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2),
+                _uiaCallCount);
+        }
+        catch { }
     }
 
     /// <summary>
@@ -92,7 +186,7 @@ public static class WindowExtraction
         try
         {
             var automation = GetAutomation();
-            var desktop = automation.GetDesktop();
+            var desktop = GetDesktop();
             var cf = automation.ConditionFactory;
 
             var deadline = DateTime.Now.AddMilliseconds(timeoutMs);
@@ -103,13 +197,13 @@ public static class WindowExtraction
                 AutomationElement? found = null;
                 try
                 {
-                    windows = desktop.FindAllChildren(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window));
+                    windows = desktop.FindAllChildren(cf.ByControlType(ControlType.Window));
 
                     foreach (var window in windows)
                     {
                         try
                         {
-                            var title = window.Name;
+                            var title = window.Properties.Name.ValueOrDefault ?? "";
                             if (!string.IsNullOrEmpty(title) &&
                                 title.Contains(titleContains, StringComparison.OrdinalIgnoreCase))
                             {
@@ -156,6 +250,7 @@ public static class WindowExtraction
             processes = System.Diagnostics.Process.GetProcessesByName(processName);
             if (processes.Length == 0)
             {
+                Log.Debug("No processes found for {Process}", processName);
                 return null;
             }
 
@@ -225,6 +320,9 @@ public static class WindowExtraction
 
         try
         {
+            // No CacheRequest — elements need live COM references for property reads.
+            // CacheRequest returns cache-only elements whose live reads fail (all properties
+            // come back empty for WebView2 content that loads asynchronously).
             descendants = element.FindAllDescendants();
             foreach (var desc in descendants)
             {
@@ -394,6 +492,83 @@ public static class WindowExtraction
         return true;
     }
 
+    // UIA property IDs for cached reads via native COM GetCachedPropertyValue
+    private const int UIA_NamePropertyId = 30005;
+    private const int UIA_ControlTypePropertyId = 30003;
+    private const int UIA_ClassNamePropertyId = 30012;
+    private const int UIA_AutomationIdPropertyId = 30011;
+
+    /// <summary>
+    /// Read a cached property from the native COM element (instant, in-process).
+    /// Returns null if the element doesn't have cached data.
+    /// </summary>
+    private static object? GetNativeCachedProperty(AutomationElement el, int propertyId)
+    {
+        if (el.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
+        {
+            dynamic native = uia3.NativeElement;
+            return native.GetCachedPropertyValue(propertyId);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Get Name from cache (instant), falling back to live read if not cached.
+    /// </summary>
+    public static string GetCachedName(AutomationElement el)
+    {
+        try
+        {
+            var val = GetNativeCachedProperty(el, UIA_NamePropertyId);
+            if (val is string s) return s;
+        }
+        catch { }
+        try { return el.Name ?? ""; } catch { return ""; }
+    }
+
+    /// <summary>
+    /// Get AutomationId from cache (instant), falling back to live read if not cached.
+    /// </summary>
+    public static string GetCachedAutoId(AutomationElement el)
+    {
+        try
+        {
+            var val = GetNativeCachedProperty(el, UIA_AutomationIdPropertyId);
+            if (val is string s) return s;
+        }
+        catch { }
+        try { return el.Properties.AutomationId.ValueOrDefault ?? ""; } catch { return ""; }
+    }
+
+    /// <summary>
+    /// Get ControlType from cache (instant), falling back to live read if not cached.
+    /// </summary>
+    public static ControlType? GetCachedControlType(AutomationElement el)
+    {
+        try
+        {
+            var val = GetNativeCachedProperty(el, UIA_ControlTypePropertyId);
+            if (val is ControlType ct) return ct;
+            if (val is int ctId) return (ControlType)ctId;
+        }
+        catch { }
+        try { return el.Properties.ControlType.ValueOrDefault; } catch { return null; }
+    }
+
+    /// <summary>
+    /// Get ClassName from cache (instant), falling back to live read if not cached.
+    /// </summary>
+    public static string GetCachedClassName(AutomationElement el)
+    {
+        try
+        {
+            var val = GetNativeCachedProperty(el, UIA_ClassNamePropertyId);
+            if (val is string s) return s;
+        }
+        catch { }
+        try { return el.Properties.ClassName.ValueOrDefault ?? ""; } catch { return ""; }
+    }
+
     /// <summary>
     /// Release COM RCW wrappers for an array of AutomationElements.
     /// Call after FindAllDescendants/FindAllChildren results are no longer needed.
@@ -437,6 +612,8 @@ public static class WindowExtraction
     {
         lock (_lock)
         {
+            ReleaseElement(_cachedDesktop);
+            _cachedDesktop = null;
             _automation?.Dispose();
             _automation = null;
         }

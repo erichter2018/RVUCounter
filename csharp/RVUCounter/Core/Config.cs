@@ -9,8 +9,8 @@ namespace RVUCounter.Core;
 public static class Config
 {
     // Version
-    public const string AppVersion = "3.2.0";
-    public const string AppVersionDate = "02/16/2026";
+    public const string AppVersion = "3.2.1";
+    public const string AppVersionDate = "02/25/2026";
     public const string AppName = "RVU Counter";
 
     // Folder structure
