@@ -372,7 +372,18 @@ public static class WindowExtraction
             {
                 try
                 {
-                    return element.Name ?? "";
+                    // Use native COM to avoid uncatchable AccessViolationException on stale elements
+                    if (element.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
+                    {
+                        try
+                        {
+                            dynamic native = uia3.NativeElement;
+                            var val = native.GetCurrentPropertyValue(UIA_NamePropertyId);
+                            if (val is string s) return s;
+                        }
+                        catch { }
+                    }
+                    return "";
                 }
                 catch
                 {
@@ -405,16 +416,32 @@ public static class WindowExtraction
             {
                 try
                 {
-                    // Try value pattern first (for text boxes, etc.)
-                    if (element.Patterns.Value.IsSupported)
+                    // Read Value via native COM GetCurrentPropertyValue to avoid
+                    // GetCurrentPattern which throws uncatchable AccessViolationException
+                    // on stale COM elements (.NET 8 cannot catch corrupted state exceptions).
+                    if (element.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
                     {
-                        var value = element.Patterns.Value.Pattern.Value.ValueOrDefault;
-                        if (!string.IsNullOrEmpty(value))
-                            return value;
+                        try
+                        {
+                            dynamic native = uia3.NativeElement;
+                            var val = native.GetCurrentPropertyValue(UIA_ValueValuePropertyId);
+                            if (val is string s && !string.IsNullOrEmpty(s))
+                                return s;
+                        }
+                        catch { /* Element may not support Value */ }
+
+                        // Fall back to AutomationId via native COM
+                        try
+                        {
+                            dynamic native = uia3.NativeElement;
+                            var autoId = native.GetCurrentPropertyValue(UIA_AutomationIdPropertyId);
+                            if (autoId is string id && !string.IsNullOrEmpty(id))
+                                return id;
+                        }
+                        catch { }
                     }
 
-                    // Fall back to AutomationId
-                    return element.Properties.AutomationId.ValueOrDefault ?? "";
+                    return "";
                 }
                 catch
                 {
@@ -497,6 +524,7 @@ public static class WindowExtraction
     private const int UIA_ControlTypePropertyId = 30003;
     private const int UIA_ClassNamePropertyId = 30012;
     private const int UIA_AutomationIdPropertyId = 30011;
+    private const int UIA_ValueValuePropertyId = 30045;
 
     /// <summary>
     /// Read a cached property from the native COM element (instant, in-process).

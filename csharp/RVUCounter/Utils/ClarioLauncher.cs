@@ -1,3 +1,4 @@
+using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
@@ -141,7 +142,14 @@ public static class ClarioLauncher
         {
             var automation = WindowExtraction.GetAutomation();
             var cf = automation.ConditionFactory;
-            allEdits = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.Edit));
+
+            var cr = new CacheRequest();
+            cr.TreeScope = TreeScope.Element;
+            cr.Add(automation.PropertyLibrary.Element.AutomationId);
+            using (cr.Activate())
+            {
+                allEdits = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.Edit));
+            }
 
             Log.Debug("ClarioLauncher: {Total} Edit fields total", allEdits.Length);
 
@@ -151,7 +159,7 @@ public static class ClarioLauncher
             {
                 try
                 {
-                    var autoId = edit.Properties.AutomationId.ValueOrDefault ?? "";
+                    var autoId = WindowExtraction.GetCachedAutoId(edit);
 
                     if (!foundFulltext)
                     {
@@ -202,8 +210,14 @@ public static class ClarioLauncher
             var automation = WindowExtraction.GetAutomation();
             var cf = automation.ConditionFactory;
 
-            // Find all DataItem elements (grid cells)
-            allDataItems = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.DataItem));
+            // Find all DataItem elements (grid cells) with cached ClassName
+            var cr = new CacheRequest();
+            cr.TreeScope = TreeScope.Element;
+            cr.Add(automation.PropertyLibrary.Element.ClassName);
+            using (cr.Activate())
+            {
+                allDataItems = chromeWindow.FindAllDescendants(cf.ByControlType(ControlType.DataItem));
+            }
 
             Log.Debug("ClarioLauncher: Scanning {Count} DataItem elements for action column", allDataItems.Length);
 
@@ -211,7 +225,7 @@ public static class ClarioLauncher
             {
                 try
                 {
-                    var className = item.Properties.ClassName.ValueOrDefault ?? "";
+                    var className = WindowExtraction.GetCachedClassName(item);
 
                     // Must be an action column cell AND in the search results grid
                     // ClassName pattern: "...content_search_result_Grid_column_actionsColumn...x-action-col-cell"

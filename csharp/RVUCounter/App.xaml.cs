@@ -11,11 +11,13 @@ namespace RVUCounter;
 public partial class App : Application
 {
     private Mutex? _singleInstanceMutex;
+    private bool _ownsMutex;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         const string mutexName = "Global\\RVUCounter_SingleInstance_E7A3F2";
         _singleInstanceMutex = new Mutex(true, mutexName, out bool createdNew);
+        _ownsMutex = createdNew;
 
         if (!createdNew)
         {
@@ -33,7 +35,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _singleInstanceMutex?.ReleaseMutex();
+        if (_ownsMutex)
+        {
+            try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
+        }
         _singleInstanceMutex?.Dispose();
         base.OnExit(e);
     }

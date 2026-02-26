@@ -18,6 +18,24 @@ public class BackupManager
 {
     private static readonly HttpClient _httpClient = new();
 
+    /// <summary>
+    /// Send an HTTP POST to Dropbox API with per-request headers.
+    /// Avoids polluting DefaultRequestHeaders on the shared static HttpClient,
+    /// which caused stale Dropbox-API-Arg headers to leak between requests.
+    /// </summary>
+    private static async Task<HttpResponseMessage> DropboxPostAsync(
+        string url, HttpContent? content = null, string? accessToken = null, string? apiArg = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        if (accessToken != null)
+            request.Headers.Add("Authorization", $"Bearer {accessToken}");
+        if (apiArg != null)
+            request.Headers.Add("Dropbox-API-Arg", apiArg);
+        if (content != null)
+            request.Content = content;
+        return await _httpClient.SendAsync(request);
+    }
+
     private readonly string _databasePath;
     private readonly Func<Models.UserSettings> _getSettings;
     private readonly Action<Models.UserSettings>? _saveSettings;
@@ -301,20 +319,16 @@ public class BackupManager
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm");
             var remotePath = $"/Backups/RVU_Backup_{timestamp}#.db";
 
-            var httpClient = _httpClient;
-            httpClient.DefaultRequestHeaders.Remove("Authorization");
-            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
-            httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
-                JsonSerializer.Serialize(new { path = remotePath, mode = "overwrite" }));
-
             // Read from temp file (not locked)
             var fileBytes = await File.ReadAllBytesAsync(tempPath);
             var content = new ByteArrayContent(fileBytes);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
 
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://content.dropboxapi.com/2/files/upload",
-                content);
+                content,
+                accessToken,
+                JsonSerializer.Serialize(new { path = remotePath, mode = "overwrite" }));
 
             if (response.IsSuccessStatusCode)
             {
@@ -383,7 +397,6 @@ public class BackupManager
 
         try
         {
-            var httpClient = _httpClient;
             // PKCE refresh tokens don't require client_secret
             var requestContent = new FormUrlEncodedContent(new Dictionary<string, string>
             {
@@ -392,7 +405,7 @@ public class BackupManager
                 { "client_id", appKey }
             });
 
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://api.dropboxapi.com/oauth2/token",
                 requestContent);
 
@@ -424,10 +437,6 @@ public class BackupManager
 
         try
         {
-            var httpClient = _httpClient;
-            httpClient.DefaultRequestHeaders.Remove("Authorization");
-            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
-
             var backupFiles = new List<(string Path, string Name, long Size)>();
 
             // List files in /Backups folder (with pagination)
@@ -436,9 +445,10 @@ public class BackupManager
                 Encoding.UTF8,
                 "application/json");
 
-            var listResponse = await httpClient.PostAsync(
+            var listResponse = await DropboxPostAsync(
                 "https://api.dropboxapi.com/2/files/list_folder",
-                listContent);
+                listContent,
+                accessToken);
 
             if (!listResponse.IsSuccessStatusCode)
             {
@@ -477,9 +487,10 @@ public class BackupManager
                         Encoding.UTF8,
                         "application/json");
 
-                    var continueResponse = await httpClient.PostAsync(
+                    var continueResponse = await DropboxPostAsync(
                         "https://api.dropboxapi.com/2/files/list_folder/continue",
-                        continueContent);
+                        continueContent,
+                        accessToken);
 
                     if (!continueResponse.IsSuccessStatusCode) break;
 
@@ -519,9 +530,10 @@ public class BackupManager
                             Encoding.UTF8,
                             "application/json");
 
-                        var deleteResponse = await httpClient.PostAsync(
+                        var deleteResponse = await DropboxPostAsync(
                             "https://api.dropboxapi.com/2/files/delete_v2",
-                            deleteContent);
+                            deleteContent,
+                            accessToken);
 
                         if (deleteResponse.IsSuccessStatusCode)
                         {
@@ -626,7 +638,6 @@ public class BackupManager
 
         try
         {
-            var httpClient = _httpClient;
             var requestContent = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 { "grant_type", "authorization_code" },
@@ -635,7 +646,7 @@ public class BackupManager
                 { "code_verifier", _pendingCodeVerifier }
             });
 
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://api.dropboxapi.com/oauth2/token",
                 requestContent);
 
@@ -914,18 +925,15 @@ public class BackupManager
                 return false;
             }
 
-            var httpClient = _httpClient;
-            httpClient.DefaultRequestHeaders.Remove("Authorization");
-            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
-
             var deleteContent = new StringContent(
                 JsonSerializer.Serialize(new { path = remotePath }),
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://api.dropboxapi.com/2/files/delete_v2",
-                deleteContent);
+                deleteContent,
+                accessToken);
 
             if (response.IsSuccessStatusCode)
             {
@@ -970,21 +978,20 @@ public class BackupManager
                 return backups;
             }
 
-            var httpClient = _httpClient;
-            httpClient.DefaultRequestHeaders.Remove("Authorization");
-            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
-
             var listContent = new StringContent(
                 JsonSerializer.Serialize(new { path = "/Backups" }),
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://api.dropboxapi.com/2/files/list_folder",
-                listContent);
+                listContent,
+                accessToken);
 
             if (!response.IsSuccessStatusCode)
             {
+                var error = await response.Content.ReadAsStringAsync();
+                Log.Warning("Failed to list Dropbox backups: {Error}", error);
                 return backups;
             }
 
@@ -1060,15 +1067,11 @@ public class BackupManager
             }
 
             // Download file from Dropbox
-            var httpClient = _httpClient;
-            httpClient.DefaultRequestHeaders.Remove("Authorization");
-            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
-            httpClient.DefaultRequestHeaders.Add("Dropbox-API-Arg",
-                JsonSerializer.Serialize(new { path = remotePath }));
-
-            var response = await httpClient.PostAsync(
+            var response = await DropboxPostAsync(
                 "https://content.dropboxapi.com/2/files/download",
-                null);
+                null,
+                accessToken,
+                JsonSerializer.Serialize(new { path = remotePath }));
 
             if (!response.IsSuccessStatusCode)
             {
