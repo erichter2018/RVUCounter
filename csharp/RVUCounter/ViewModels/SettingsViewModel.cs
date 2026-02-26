@@ -1274,9 +1274,9 @@ public partial class SettingsViewModel : ObservableObject
         ShowRvuPerStudy = settings.ShowRvuPerStudy;
         ShowPaceCar = settings.ShowPaceCar;
         ShowInpatientStatPercentage = settings.ShowInpatientStatPercentage;
-        LoadMainStatOrder(settings.MainStatsOrder);
 
-        // Compensation visibility
+        // Compensation visibility — must be set BEFORE LoadMainStatOrder,
+        // which reads these via GetCompVisibilityByKey()
         ShowCompTotal = settings.ShowCompTotal;
         ShowCompAvg = settings.ShowCompAvg;
         ShowCompLastHour = settings.ShowCompLastHour;
@@ -1284,6 +1284,8 @@ public partial class SettingsViewModel : ObservableObject
         ShowCompProjected = settings.ShowCompProjected;
         ShowCompProjectedMonth = settings.ShowCompProjectedMonth;
         ShowCompProjectedShift = settings.ShowCompProjectedShift;
+
+        LoadMainStatOrder(settings.MainStatsOrder);
 
         // Compensation rates
         BaseRvuRate = settings.BaseRvuRate;
