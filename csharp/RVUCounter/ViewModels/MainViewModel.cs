@@ -2560,7 +2560,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Procedure = maStudy.Procedure,
                         StudyType = maStudy.StudyType,
                         Rvu = maStudy.Rvu,
-                        Timestamp = maStudy.FirstSeen,
+                        Timestamp = currentTime,  // Count RVU at completion time
                         TimeFinished = currentTime,
                         PatientClass = maStudy.PatientClass,
                         DurationSeconds = durationPerStudy,
@@ -2722,8 +2722,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Procedure = completed.Procedure,
                 StudyType = studyType,
                 Rvu = rvu,
-                Timestamp = completed.FirstSeen,  // When study was started
-                TimeFinished = completed.CompletedAt ?? currentTime,  // When study was completed
+                Timestamp = completed.CompletedAt ?? currentTime,  // Count RVU at completion time
+                TimeFinished = completed.CompletedAt ?? currentTime,
                 PatientClass = patientClassToRecord ?? "Unknown",
                 DurationSeconds = completed.Duration,
                 Source = "Mosaic"
@@ -2950,8 +2950,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Procedure = completed.Procedure,
                 StudyType = studyType,
                 Rvu = rvu,
-                Timestamp = completed.FirstSeen,  // When study was started
-                TimeFinished = completed.CompletedAt ?? currentTime,  // When study was completed
+                Timestamp = completed.CompletedAt ?? currentTime,  // Count RVU at completion time
+                TimeFinished = completed.CompletedAt ?? currentTime,
                 PatientClass = patientClassToRecord ?? "Unknown",
                 DurationSeconds = completed.Duration,
                 Source = "Mosaic"
