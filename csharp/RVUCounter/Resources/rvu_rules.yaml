@@ -19,6 +19,7 @@ rvu_table:
   MRI Breast: 1.75
   MRI Neck: 1.75
   MRI Other: 1.75
+  CT CAP + Spine Recons: 4.86
   CT CAP: 3.06
   CT CAP Trauma: 3.0
   CTA CAP: 3.06
@@ -423,6 +424,18 @@ classification_rules:
     - angiography
     excluded_keywords:
     - chest
+    - XR
+    - xr
+    - x-ray
+  CT CAP + Spine Recons:
+  - required_keywords:
+    - CT
+    - abd
+    - pel
+    - ch
+    - spine
+    - recon
+    excluded_keywords:
     - XR
     - xr
     - x-ray
