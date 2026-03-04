@@ -22,6 +22,8 @@ public static class WindowExtraction
     private static int _uiaCallCount;
     private static long _lastUiaResetTick64;
     private static long _lastHeartbeatTick64;
+    private static bool _loggedNameFallback;
+    private static bool _loggedTextFallback;
     private const long UiaResetIntervalMs = 300_000; // 5 minutes
     private const int UiaResetCallThreshold = 100;
     private const long HeartbeatIntervalMs = 60_000; // 1 minute
@@ -383,6 +385,22 @@ public static class WindowExtraction
                         }
                         catch { }
                     }
+                    // Fallback: FlaUI standard property access (uses get_CurrentName() COM call
+                    // which succeeds on some machines where dynamic GetCurrentPropertyValue doesn't)
+                    try
+                    {
+                        var name = element.Properties.Name.ValueOrDefault;
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            if (!_loggedNameFallback)
+                            {
+                                _loggedNameFallback = true;
+                                Log.Warning("GetElementName: native COM returned empty but FlaUI fallback succeeded — dynamic dispatch may be broken on this machine");
+                            }
+                            return name;
+                        }
+                    }
+                    catch { }
                     return "";
                 }
                 catch
@@ -440,6 +458,22 @@ public static class WindowExtraction
                         }
                         catch { }
                     }
+                    // Fallback: FlaUI standard property access (uses typed COM vtable calls
+                    // which succeed where dynamic IDispatch dispatch doesn't)
+                    try
+                    {
+                        var autoId = element.Properties.AutomationId.ValueOrDefault;
+                        if (!string.IsNullOrEmpty(autoId))
+                        {
+                            if (!_loggedTextFallback)
+                            {
+                                _loggedTextFallback = true;
+                                Log.Warning("GetElementText: native COM returned empty but FlaUI fallback succeeded");
+                            }
+                            return autoId;
+                        }
+                    }
+                    catch { }
 
                     return "";
                 }

@@ -1691,10 +1691,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var targetMonthlyHours = (targetShifts * _dataManager.Settings.ShiftLengthHours) + extraHours;
             var remainingHours = Math.Max(0, targetMonthlyHours - actualMonthHours);
 
-            // Fallback matches Statistics behavior: use current period pace when month has no data.
+            // Use last 3 full calendar months for rate calculation (more stable than current month alone)
+            var historicalStart = monthStart.AddMonths(-3);
+            var historicalEnd = monthStart;
+            var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, historicalEnd);
+            var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
+            var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
+            var historicalRvu = historicalRecords.Sum(r => r.Rvu);
+
+            // Fallback chain: historical 3-month → current month → current shift pace
             var fallbackHours = _shiftStart.HasValue ? Math.Max((DateTime.Now - _shiftStart.Value).TotalHours, 0) : 0;
-            var compPerHour = actualMonthHours > 0 ? actualMonthComp / actualMonthHours : (fallbackHours > 0 ? TotalCompensation / fallbackHours : 0);
-            var rvuPerHour = actualMonthHours > 0 ? actualMonthRvu / actualMonthHours : (fallbackHours > 0 ? TotalRvu / fallbackHours : 0);
+            var compPerHour = historicalHours > 0 ? historicalComp / historicalHours
+                            : actualMonthHours > 0 ? actualMonthComp / actualMonthHours
+                            : fallbackHours > 0 ? TotalCompensation / fallbackHours : 0;
+            var rvuPerHour = historicalHours > 0 ? historicalRvu / historicalHours
+                           : actualMonthHours > 0 ? actualMonthRvu / actualMonthHours
+                           : fallbackHours > 0 ? TotalRvu / fallbackHours : 0;
 
             var projectedRemainingComp = compPerHour * remainingHours;
             var projectedRemainingRvu = rvuPerHour * remainingHours;

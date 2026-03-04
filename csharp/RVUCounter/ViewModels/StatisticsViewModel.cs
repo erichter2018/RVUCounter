@@ -966,7 +966,7 @@ public partial class StatisticsViewModel : ObservableObject
                 TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${summaryTbwuComp:N0}" });
             }
 
-            // Projected Monthly Income (uses current month data)
+            // Projected Monthly Income (uses 3-month historical rates)
             {
                 var currentMonthName = DateTime.Now.ToString("MMMM");
                 var monthStart = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
@@ -984,7 +984,16 @@ public partial class StatisticsViewModel : ObservableObject
                 var targetMonthlyHours = (targetShifts * shiftLength) + extraHours;
                 var remainingHours = Math.Max(0, targetMonthlyHours - actualMonthHours);
 
-                var projCompPerHour = actualMonthHours > 0 ? actualMonthComp / actualMonthHours : (hoursSpan > 0 ? totalComp / hoursSpan : 0);
+                // Use last 3 full calendar months for rate calculation
+                var historicalStart = monthStart.AddMonths(-3);
+                var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, monthStart);
+                var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
+                var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
+
+                // Fallback chain: historical 3-month → current month → selected period
+                var projCompPerHour = historicalHours > 0 ? historicalComp / historicalHours
+                                    : actualMonthHours > 0 ? actualMonthComp / actualMonthHours
+                                    : hoursSpan > 0 ? totalComp / hoursSpan : 0;
                 var projectedMonthlyComp = actualMonthComp + (projCompPerHour * remainingHours);
 
                 TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income", Col2 = $"${projectedMonthlyComp:N0}" });
@@ -2074,9 +2083,20 @@ public partial class StatisticsViewModel : ObservableObject
             // Remaining hours = target - actual (simple subtraction)
             var remainingHours = Math.Max(0, targetMonthlyHours - actualMonthHours);
 
-            // Calculate hourly rate from current month (or selected period if no month data)
-            var compPerHour = actualMonthHours > 0 ? actualMonthComp / actualMonthHours : (hoursSpan > 0 ? totalComp / hoursSpan : 0);
-            var rvuPerHour = actualMonthHours > 0 ? actualMonthRvu / actualMonthHours : (hoursSpan > 0 ? TotalRvu / hoursSpan : 0);
+            // Use last 3 full calendar months for rate calculation (more stable than current month alone)
+            var historicalStart = monthStart.AddMonths(-3);
+            var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, monthStart);
+            var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
+            var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
+            var historicalRvu = historicalRecords.Sum(r => r.Rvu);
+
+            // Fallback chain: historical 3-month → current month → selected period
+            var compPerHour = historicalHours > 0 ? historicalComp / historicalHours
+                            : actualMonthHours > 0 ? actualMonthComp / actualMonthHours
+                            : hoursSpan > 0 ? totalComp / hoursSpan : 0;
+            var rvuPerHour = historicalHours > 0 ? historicalRvu / historicalHours
+                           : actualMonthHours > 0 ? actualMonthRvu / actualMonthHours
+                           : hoursSpan > 0 ? TotalRvu / hoursSpan : 0;
 
             // Project remaining
             var projectedRemainingComp = compPerHour * remainingHours;
@@ -2102,11 +2122,14 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income", Col2 = $"${projectedMonthlyComp:N0}" });
             TableData.Add(new StatRow { Col1 = "Projected Annual Income", Col2 = $"${projectedAnnualComp:N0}" });
 
-            // TBWU projected income
+            // TBWU projected income (also uses historical rates)
             if (_tbwuLookup.IsAvailable)
             {
                 var actualMonthTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(currentMonthRecords, role);
-                var tbwuCompPerHour = actualMonthHours > 0 ? actualMonthTbwuComp / actualMonthHours : (hoursSpan > 0 ? totalTbwuComp / hoursSpan : 0);
+                var historicalTbwuComp = historicalHours > 0 ? _tbwuLookup.CalculateTotalTbwuCompensation(historicalRecords, role) : 0;
+                var tbwuCompPerHour = historicalHours > 0 ? historicalTbwuComp / historicalHours
+                                   : actualMonthHours > 0 ? actualMonthTbwuComp / actualMonthHours
+                                   : hoursSpan > 0 ? totalTbwuComp / hoursSpan : 0;
                 var projectedRemainingTbwuComp = tbwuCompPerHour * remainingHours;
                 var projectedMonthlyTbwuComp = actualMonthTbwuComp + projectedRemainingTbwuComp;
                 var projectedAnnualTbwuComp = projectedMonthlyTbwuComp * 12;
