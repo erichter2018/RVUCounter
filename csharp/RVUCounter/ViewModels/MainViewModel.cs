@@ -42,6 +42,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _fatigueTimer;
     private readonly DispatcherTimer _backupTimer;
     private readonly BackupManager _backupManager;
+    private DispatcherTimer? _updateCheckTimer;
+    private int _updateCheckRunning; // 0 = idle, 1 = running (re-entrancy guard)
     private readonly Utils.MosaicExtractor _mosaicExtractor;
     private readonly Utils.IMosaicReader _mosaicReader;
 
@@ -1048,6 +1050,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _backupTimer.Tick += OnBackupTick;
         _backupTimer.Start(); // Always running to check schedule
 
+        // Setup periodic update check timer (every 4 hours)
+        if (_dataManager.Settings.AutoUpdateEnabled)
+        {
+            StartUpdateCheckTimer();
+        }
+
         // Check for existing shift and resume
         LoadCurrentShift();
 
@@ -1181,60 +1189,156 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
                 }
 
-                Log.Information("Auto-update enabled, checking for updates...");
+                var retryDelays = new[] { 0, 2, 15, 60 }; // minutes: immediate, 2min, 15min, 60min
                 var updateManager = new UpdateManager();
-                var updateInfo = await updateManager.CheckForUpdateAsync();
 
-                if (updateInfo?.IsUpdateAvailable == true)
+                for (int attempt = 0; attempt < retryDelays.Length; attempt++)
                 {
-                    Log.Information("Update available: {Version}, applying silently", updateInfo.Version);
-
-                    if (string.IsNullOrEmpty(updateInfo.DownloadUrl))
+                    if (attempt > 0)
                     {
-                        Log.Warning("Update {Version} has no download URL", updateInfo.Version);
-                        return;
-                    }
-
-                    StatusMessage = $"Updating to v{updateInfo.Version}...";
-
-                    var success = await updateManager.DownloadAndApplyUpdateAsync(
-                        updateInfo.DownloadUrl,
-                        expectedSize: updateInfo.AssetSize);
-
-                    if (success)
-                    {
-                        Log.Information("Update applied successfully, preparing to restart");
-
-                        // Flush data before exit to prevent corruption
-                        try
-                        {
-                            _dataManager.SaveSettings();
-                            _dataManager.Database.Checkpoint();
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning(ex, "Error flushing data before update restart");
-                        }
-
-                        // Write circuit breaker marker before restarting
-                        UpdateManager.WriteRestartMarker();
-                        UpdateManager.RestartApp();
+                        Log.Information("Update check failed (attempt {Attempt}/{Total}, retrying in {Delay}min)",
+                            attempt, retryDelays.Length, retryDelays[attempt]);
+                        await Task.Delay(TimeSpan.FromMinutes(retryDelays[attempt]));
                     }
                     else
                     {
-                        Log.Warning("Silent update failed for {Version}", updateInfo.Version);
-                        StatusMessage = "Update failed";
+                        Log.Information("Auto-update enabled, checking for updates...");
                     }
+
+                    var updateInfo = await updateManager.CheckForUpdateAsync();
+
+                    if (updateInfo == null)
+                        continue; // Network failure — retry
+
+                    if (updateInfo.IsUpdateAvailable && !string.IsNullOrEmpty(updateInfo.DownloadUrl))
+                    {
+                        Log.Information("Update available: {Version}, applying silently", updateInfo.Version);
+                        StatusMessage = $"Updating to v{updateInfo.Version}...";
+
+                        var success = await updateManager.DownloadAndApplyUpdateAsync(
+                            updateInfo.DownloadUrl,
+                            expectedSize: updateInfo.AssetSize);
+
+                        if (success)
+                        {
+                            Log.Information("Update applied successfully, preparing to restart");
+                            try
+                            {
+                                _dataManager.SaveSettings();
+                                _dataManager.Database.Checkpoint();
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warning(ex, "Error flushing data before update restart");
+                            }
+
+                            UpdateManager.WriteRestartMarker();
+                            UpdateManager.RestartApp();
+                        }
+                        else
+                        {
+                            Log.Warning("Silent update failed for {Version}", updateInfo.Version);
+                            StatusMessage = "Update failed";
+                        }
+                        return; // Got a response (success or download fail) — don't retry
+                    }
+
+                    // Got a valid response with no update available — no need to retry
+                    Log.Debug("No update available");
+                    return;
                 }
-                else
-                {
-                    Log.Debug("No update available or check failed");
-                }
+
+                Log.Warning("Update check failed after all retry attempts");
             }
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Error during startup update check");
+        }
+    }
+
+    private void StartUpdateCheckTimer()
+    {
+        _updateCheckTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromHours(4)
+        };
+        _updateCheckTimer.Tick += OnUpdateCheckTick;
+        _updateCheckTimer.Start();
+    }
+
+    private void StopUpdateCheckTimer()
+    {
+        if (_updateCheckTimer != null)
+        {
+            _updateCheckTimer.Tick -= OnUpdateCheckTick;
+            _updateCheckTimer.Stop();
+            _updateCheckTimer = null;
+        }
+    }
+
+    private async void OnUpdateCheckTick(object? sender, EventArgs e)
+    {
+        await PerformSilentUpdateCheckAsync();
+    }
+
+    /// <summary>
+    /// Silent update check used by periodic timer. Re-entrancy guarded.
+    /// </summary>
+    private async Task PerformSilentUpdateCheckAsync()
+    {
+        if (Interlocked.CompareExchange(ref _updateCheckRunning, 1, 0) != 0)
+            return;
+
+        try
+        {
+            Log.Information("Periodic update check running...");
+            var updateManager = new UpdateManager();
+            var updateInfo = await updateManager.CheckForUpdateAsync();
+
+            if (updateInfo?.IsUpdateAvailable == true && !string.IsNullOrEmpty(updateInfo.DownloadUrl))
+            {
+                Log.Information("Periodic check found update: {Version}, applying silently", updateInfo.Version);
+                StatusMessage = $"Updating to v{updateInfo.Version}...";
+
+                var success = await updateManager.DownloadAndApplyUpdateAsync(
+                    updateInfo.DownloadUrl,
+                    expectedSize: updateInfo.AssetSize);
+
+                if (success)
+                {
+                    Log.Information("Periodic update applied successfully, preparing to restart");
+                    try
+                    {
+                        _dataManager.SaveSettings();
+                        _dataManager.Database.Checkpoint();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Error flushing data before update restart");
+                    }
+
+                    UpdateManager.WriteRestartMarker();
+                    UpdateManager.RestartApp();
+                }
+                else
+                {
+                    Log.Warning("Periodic silent update failed for {Version}", updateInfo.Version);
+                    StatusMessage = IsPipeConnected ? "🔗 MT: Listening" : "Ready";
+                }
+            }
+            else
+            {
+                Log.Debug("Periodic update check: no update available");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Error during periodic update check");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _updateCheckRunning, 0);
         }
     }
 
@@ -1334,6 +1438,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Log.Information("Team panel not visible, reinitializing");
                 InitializeTeamDashboard();
             }
+        }
+
+        // Start/stop periodic update timer based on setting
+        if (settings.AutoUpdateEnabled && _updateCheckTimer == null)
+        {
+            StartUpdateCheckTimer();
+        }
+        else if (!settings.AutoUpdateEnabled && _updateCheckTimer != null)
+        {
+            StopUpdateCheckTimer();
         }
 
         Log.Information("Display settings refreshed from UserSettings");
@@ -4062,6 +4176,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _pendingStudiesTimer.Tick -= OnPendingStudiesTimerTick;
             _pendingStudiesTimer.Stop();
         }
+        StopUpdateCheckTimer();
         _teamSyncTimer?.Stop();
         _teamSyncService?.Dispose();
         StopPipeClient();

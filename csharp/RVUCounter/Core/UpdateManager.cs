@@ -21,6 +21,7 @@ public class UpdateManager
     private static readonly TimeSpan ApiTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(5);
     private static readonly HttpClient _httpClient = CreateHttpClient();
+    private static readonly SemaphoreSlim _updateOperationLock = new(1, 1);
 
     private static HttpClient CreateHttpClient()
     {
@@ -146,10 +147,12 @@ public class UpdateManager
                 return true;
 
             var content = File.ReadAllText(markerPath).Trim();
-            File.Delete(markerPath);
 
             if (DateTime.TryParse(content, null, System.Globalization.DateTimeStyles.RoundtripKind, out var lastRestart))
             {
+                // Delete marker after successfully parsing (not before)
+                try { File.Delete(markerPath); } catch { }
+
                 var elapsed = DateTime.UtcNow - lastRestart;
                 if (elapsed.TotalMinutes < 3)
                 {
@@ -157,6 +160,11 @@ public class UpdateManager
                         elapsed.TotalSeconds);
                     return false;
                 }
+            }
+            else
+            {
+                // Corrupt marker — delete it
+                try { File.Delete(markerPath); } catch { }
             }
         }
         catch (Exception ex)
@@ -194,9 +202,15 @@ public class UpdateManager
             var name = root.GetProperty("name").GetString() ?? "";
             var body = root.GetProperty("body").GetString() ?? "";
             var htmlUrl = root.GetProperty("html_url").GetString() ?? "";
-            var publishedAt = root.TryGetProperty("published_at", out var pubProp)
-                ? DateTime.Parse(pubProp.GetString() ?? "")
-                : DateTime.Now;
+            var publishedAt = DateTime.UtcNow;
+            if (root.TryGetProperty("published_at", out var pubProp))
+            {
+                var publishedAtRaw = pubProp.GetString();
+                if (DateTime.TryParse(publishedAtRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedPublishedAt))
+                {
+                    publishedAt = parsedPublishedAt;
+                }
+            }
 
             // Find download asset - prefer ZIP over EXE (corporate security friendly)
             string? downloadUrl = null;
@@ -205,33 +219,12 @@ public class UpdateManager
 
             if (root.TryGetProperty("assets", out var assets))
             {
-                // First pass: look for ZIP
-                foreach (var asset in assets.EnumerateArray())
+                // Prefer canonical RVUCounter assets first, then extension fallbacks.
+                if (!TryGetAssetByExactName(assets, "RVUCounter.zip", out downloadUrl, out assetName, out assetSize) &&
+                    !TryGetAssetByExactName(assets, "RVUCounter.exe", out downloadUrl, out assetName, out assetSize) &&
+                    !TryGetAssetByExtension(assets, ".zip", out downloadUrl, out assetName, out assetSize))
                 {
-                    var assetFileName = asset.GetProperty("name").GetString() ?? "";
-                    if (assetFileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                    {
-                        downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                        assetName = assetFileName;
-                        assetSize = asset.GetProperty("size").GetInt64();
-                        break;
-                    }
-                }
-
-                // Second pass: fall back to EXE if no ZIP
-                if (downloadUrl == null)
-                {
-                    foreach (var asset in assets.EnumerateArray())
-                    {
-                        var assetFileName = asset.GetProperty("name").GetString() ?? "";
-                        if (assetFileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                        {
-                            downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                            assetName = assetFileName;
-                            assetSize = asset.GetProperty("size").GetInt64();
-                            break;
-                        }
-                    }
+                    TryGetAssetByExtension(assets, ".exe", out downloadUrl, out assetName, out assetSize);
                 }
             }
 
@@ -248,7 +241,7 @@ public class UpdateManager
             };
 
             // Compare versions
-            info.IsUpdateAvailable = IsNewerVersion(tagName, _currentVersion);
+            info.IsUpdateAvailable = !string.IsNullOrEmpty(downloadUrl) && IsNewerVersion(tagName, _currentVersion);
 
             Log.Debug("Update check: current={Current}, latest={Latest}, available={Available}",
                 _currentVersion, tagName, info.IsUpdateAvailable);
@@ -270,29 +263,108 @@ public class UpdateManager
     /// <summary>
     /// Compare semantic versions.
     /// </summary>
-    private bool IsNewerVersion(string latest, string current)
+    internal bool IsNewerVersion(string latest, string current)
     {
-        try
+        if (TryParseComparableVersion(latest, out var latestVersion) &&
+            TryParseComparableVersion(current, out var currentVersion))
         {
-            var latestParts = latest.Split('.').Select(int.Parse).ToArray();
-            var currentParts = current.Split('.').Select(int.Parse).ToArray();
-
-            for (int i = 0; i < Math.Max(latestParts.Length, currentParts.Length); i++)
-            {
-                var l = i < latestParts.Length ? latestParts[i] : 0;
-                var c = i < currentParts.Length ? currentParts[i] : 0;
-
-                if (l > c) return true;
-                if (l < c) return false;
-            }
+            return latestVersion > currentVersion;
         }
-        catch
+
+        // If parsing fails, fall back to string comparison
+        return string.Compare(latest, current, StringComparison.OrdinalIgnoreCase) > 0;
+    }
+
+    internal static bool TryParseComparableVersion(string versionText, out Version version)
+    {
+        version = new Version(0, 0);
+        if (string.IsNullOrWhiteSpace(versionText))
+            return false;
+
+        var normalized = versionText.Trim().TrimStart('v', 'V');
+        var core = normalized.Split('-', '+')[0];
+        if (Version.TryParse(core, out var parsedCore) && parsedCore != null)
         {
-            // If parsing fails, fall back to string comparison
-            return string.Compare(latest, current, StringComparison.OrdinalIgnoreCase) > 0;
+            version = parsedCore;
+            return true;
+        }
+
+        var digitsAndDotsOnly = new string(core.Where(c => char.IsDigit(c) || c == '.').ToArray());
+        if (Version.TryParse(digitsAndDotsOnly, out var parsedFallback) && parsedFallback != null)
+        {
+            version = parsedFallback;
+            return true;
         }
 
         return false;
+    }
+
+    internal static bool TryGetAssetByExactName(
+        JsonElement assets,
+        string expectedFileName,
+        out string? downloadUrl,
+        out string? assetName,
+        out long assetSize)
+    {
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.GetProperty("name").GetString() ?? "";
+            if (!name.Equals(expectedFileName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            downloadUrl = asset.GetProperty("browser_download_url").GetString();
+            assetName = name;
+            assetSize = asset.GetProperty("size").GetInt64();
+            return true;
+        }
+
+        downloadUrl = null;
+        assetName = null;
+        assetSize = 0;
+        return false;
+    }
+
+    internal static bool TryGetAssetByExtension(
+        JsonElement assets,
+        string extension,
+        out string? downloadUrl,
+        out string? assetName,
+        out long assetSize)
+    {
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.GetProperty("name").GetString() ?? "";
+            if (!name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            downloadUrl = asset.GetProperty("browser_download_url").GetString();
+            assetName = name;
+            assetSize = asset.GetProperty("size").GetInt64();
+            return true;
+        }
+
+        downloadUrl = null;
+        assetName = null;
+        assetSize = 0;
+        return false;
+    }
+
+    internal static void ExtractZipWithRetry(string zipPath, string destinationDir)
+    {
+        const int maxAttempts = 5;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                ZipFile.ExtractToDirectory(zipPath, destinationDir);
+                return;
+            }
+            catch (IOException ex) when (attempt < maxAttempts)
+            {
+                Log.Warning(ex, "ZIP extract attempt {Attempt}/{Max} failed, retrying", attempt, maxAttempts);
+                Thread.Sleep(TimeSpan.FromMilliseconds(250 * attempt));
+            }
+        }
     }
 
     /// <summary>
@@ -306,9 +378,17 @@ public class UpdateManager
         long expectedSize = 0)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"RVUCounter_Update_{Guid.NewGuid():N}");
+        var lockAcquired = false;
 
         try
         {
+            lockAcquired = await _updateOperationLock.WaitAsync(TimeSpan.FromSeconds(10));
+            if (!lockAcquired)
+            {
+                Log.Warning("Update skipped because another update operation is still running");
+                return false;
+            }
+
             Directory.CreateDirectory(tempDir);
 
             // Strip query parameters from URL for filename
@@ -331,20 +411,22 @@ public class UpdateManager
             var totalBytes = response.Content.Headers.ContentLength ?? -1;
             var downloadedBytes = 0L;
 
-            await using var contentStream = await response.Content.ReadAsStreamAsync(cts.Token);
-            await using var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
-
-            var buffer = new byte[65536];
-            int bytesRead;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer, cts.Token)) > 0)
+            // Ensure download streams are closed before attempting to extract/open the file.
+            await using (var contentStream = await response.Content.ReadAsStreamAsync(cts.Token))
+            await using (var fileStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cts.Token);
-                downloadedBytes += bytesRead;
+                var buffer = new byte[65536];
+                int bytesRead;
 
-                if (totalBytes > 0)
+                while ((bytesRead = await contentStream.ReadAsync(buffer, cts.Token)) > 0)
                 {
-                    progress?.Report((double)downloadedBytes / totalBytes);
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cts.Token);
+                    downloadedBytes += bytesRead;
+
+                    if (totalBytes > 0)
+                    {
+                        progress?.Report((double)downloadedBytes / totalBytes);
+                    }
                 }
             }
 
@@ -371,7 +453,7 @@ public class UpdateManager
             if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 extractedDir = Path.Combine(tempDir, "extracted");
-                ZipFile.ExtractToDirectory(tempFile, extractedDir);
+                ExtractZipWithRetry(tempFile, extractedDir);
 
                 // Find the exe in the extracted folder
                 var exeFiles = Directory.GetFiles(extractedDir, "RVUCounter.exe", SearchOption.AllDirectories);
@@ -409,6 +491,11 @@ public class UpdateManager
         }
         finally
         {
+            if (lockAcquired)
+            {
+                _updateOperationLock.Release();
+            }
+
             // Cleanup temp directory (but not immediately as we may need the new exe)
             try
             {
@@ -558,16 +645,19 @@ public class UpdateManager
         {
             var currentExe = GetCurrentExePath();
             var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-            var argsString = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
 
-            Log.Information("Restarting application: {Exe} {Args}", currentExe, argsString);
+            Log.Information("Restarting application: {Exe} {ArgCount} args", currentExe, args.Length);
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = currentExe,
-                Arguments = argsString,
                 UseShellExecute = true
             };
+
+            foreach (var arg in args)
+            {
+                startInfo.ArgumentList.Add(arg);
+            }
 
             Process.Start(startInfo);
 

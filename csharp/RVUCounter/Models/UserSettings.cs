@@ -78,7 +78,6 @@ public class UserSettings
 
     // Update settings
     public bool AutoUpdateEnabled { get; set; } = true;
-    public string? SkippedVersion { get; set; }
     public string? LastSeenVersion { get; set; }
 
     // Statistics preferences
