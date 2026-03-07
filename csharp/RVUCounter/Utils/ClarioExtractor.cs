@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
+using FlaUI.UIA3;
 using Serilog;
 
 namespace RVUCounter.Utils;
@@ -444,15 +445,17 @@ public static class ClarioExtractor
             string name = "";
             string text = "";
 
-            // Silent catches — property access failures are expected and transient.
-            // Logging each one generates 98K lines in 5 minutes.
-            try { automationId = element.Properties.AutomationId.ValueOrDefault ?? ""; } catch { }
-            try { name = element.Name ?? ""; } catch { }
+            // Use native COM GetCurrentPropertyValue to avoid uncatchable
+            // AccessViolationException from GetCurrentPattern / get_CurrentName
+            // on stale Chrome elements (.NET 8 cannot catch corrupted state exceptions).
             try
             {
-                if (element.Patterns.Value.IsSupported)
+                if (element.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
                 {
-                    text = element.Patterns.Value.Pattern.Value.ValueOrDefault ?? "";
+                    dynamic native = uia3.NativeElement;
+                    try { var v = native.GetCurrentPropertyValue(30011); if (v is string s) automationId = s; } catch { }
+                    try { var v = native.GetCurrentPropertyValue(30005); if (v is string s) name = s; } catch { }
+                    try { var v = native.GetCurrentPropertyValue(30045); if (v is string s) text = s; } catch { }
                 }
             }
             catch { }
@@ -473,10 +476,18 @@ public static class ClarioExtractor
             if (elements.Count >= maxElements || stopwatch.ElapsedMilliseconds >= timeoutMs)
                 return;
 
-            // Recursively get children — no CacheRequest so elements get full live COM references.
+            // Recursively get children — validate element is alive before FindAll
+            // to reduce risk of AccessViolationException on stale COM objects.
             AutomationElement[]? children = null;
             try
             {
+                // Quick liveness check: if the native element can't return a property,
+                // FindAllChildren would likely crash with uncatchable AccessViolation.
+                if (element.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3Check)
+                {
+                    try { dynamic n = uia3Check.NativeElement; n.GetCurrentPropertyValue(30003); }
+                    catch { return; }
+                }
                 children = element.FindAllChildren();
                 foreach (var child in children)
                 {

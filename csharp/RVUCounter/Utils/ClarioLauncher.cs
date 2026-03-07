@@ -3,6 +3,7 @@ using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
+using FlaUI.UIA3;
 using Serilog;
 
 namespace RVUCounter.Utils;
@@ -96,13 +97,18 @@ public static class ClarioLauncher
     /// </summary>
     private static bool SetFieldValue(AutomationElement field, string value)
     {
-        // Try UIA Value pattern first
+        // Try UIA Value pattern first via native COM to avoid uncatchable AccessViolationException
         try
         {
-            if (field.Patterns.Value.IsSupported)
+            if (field.FrameworkAutomationElement is UIA3FrameworkAutomationElement uia3)
             {
-                field.Patterns.Value.Pattern.SetValue(value);
-                return true;
+                dynamic native = uia3.NativeElement;
+                var supported = native.GetCurrentPropertyValue(30043); // UIA_IsValuePatternAvailablePropertyId
+                if (supported is true)
+                {
+                    field.Patterns.Value.Pattern.SetValue(value);
+                    return true;
+                }
             }
         }
         catch (Exception ex)
