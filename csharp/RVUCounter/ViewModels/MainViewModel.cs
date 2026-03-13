@@ -47,6 +47,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Utils.MosaicExtractor _mosaicExtractor;
     private readonly Utils.IMosaicReader _mosaicReader;
 
+    private readonly TbwuLookup _tbwuLookup;
+
     // Named pipe client for MosaicTools bridge (replaces double-scraping)
     private MosaicToolsPipeClient? _pipeClient;
     /// <summary>Whether MosaicTools pipe is currently connected (auto-detect integration).</summary>
@@ -975,6 +977,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _fatigueDetector = new FatigueDetector();
         _mosaicExtractor = new Utils.MosaicExtractor();
         _mosaicReader = _mosaicExtractor;
+        _tbwuLookup = new TbwuLookup(baseDir);
 
         // Load settings
         IsAlwaysOnTop = _dataManager.Settings.AlwaysOnTop;
@@ -1509,8 +1512,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _lastStudyRecordedTime = mostRecent.TimeFinished ?? mostRecent.Timestamp;
         }
 
-        // Total RVU and compensation
-        TotalRvu = records.Sum(r => r.Rvu);
+        // Total work units (TBWU for April+ studies, RVU for earlier) and compensation
+        TotalRvu = records.Sum(r => GetPrimaryWorkUnit(r));
         TotalCompensation = records.Sum(r => CalculateStudyCompensation(r));
         StudyCount = records.Count;
 
@@ -1536,7 +1539,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Last hour (rolling 60 minutes)
         var oneHourAgo = currentTime.AddHours(-1);
         var lastHourRecords = records.Where(r => r.Timestamp >= oneHourAgo).ToList();
-        LastHourRvu = lastHourRecords.Sum(r => r.Rvu);
+        LastHourRvu = lastHourRecords.Sum(r => GetPrimaryWorkUnit(r));
         LastHourCompensation = lastHourRecords.Sum(r => CalculateStudyCompensation(r));
 
         // Last full hour (e.g., 2am to 3am)
@@ -1547,13 +1550,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var lastFullHourRecords = records.Where(r => 
             r.Timestamp >= lastFullHourStart && r.Timestamp < lastFullHourEnd).ToList();
-        LastFullHourRvu = lastFullHourRecords.Sum(r => r.Rvu);
+        LastFullHourRvu = lastFullHourRecords.Sum(r => GetPrimaryWorkUnit(r));
         LastFullHourCompensation = lastFullHourRecords.Sum(r => CalculateStudyCompensation(r));
         LastFullHourRange = $"{FormatHourLabel(lastFullHourStart)}-{FormatHourLabel(lastFullHourEnd)}";
 
         // Projected for current hour
         var currentHourRecords = records.Where(r => r.Timestamp >= currentHourStart).ToList();
-        var currentHourRvu = currentHourRecords.Sum(r => r.Rvu);
+        var currentHourRvu = currentHourRecords.Sum(r => GetPrimaryWorkUnit(r));
         var currentHourComp = currentHourRecords.Sum(r => CalculateStudyCompensation(r));
 
         var minutesIntoHour = (currentTime - currentHourStart).TotalMinutes;
@@ -1654,6 +1657,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void RebuildOrderedStatRows()
     {
+        var isTbwuEra = CompensationRates.IsTbwuEra(DateTime.Now) && _tbwuLookup.IsAvailable;
+        var unitLabel = isTbwuEra ? "TBWU" : "wRVU";
+        var perStudyLabel = isTbwuEra ? "TBWU/study:" : "RVU/study:";
+
         var rowsByKey = new Dictionary<string, MainStatDisplayRow>(StringComparer.OrdinalIgnoreCase);
 
         if (ShowTotal)
@@ -1661,7 +1668,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             rowsByKey["total"] = new MainStatDisplayRow
             {
                 Key = "total",
-                Label = "total wRVU:",
+                Label = $"total {unitLabel}:",
                 Value = $"{TotalRvu:F1}",
                 Compensation = $"(${TotalCompensation:N0})",
                 ShowCompensation = ShowCompTotal
@@ -1685,7 +1692,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             rowsByKey["rvu_per_study"] = new MainStatDisplayRow
             {
                 Key = "rvu_per_study",
-                Label = "RVU/study:",
+                Label = perStudyLabel,
                 Value = StudyCount > 0 ? $"{(TotalRvu / StudyCount):F2}" : "0.00",
                 Compensation = "",
                 ShowCompensation = false
@@ -1795,8 +1802,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 .Where(r => r.Timestamp >= monthStart && r.Timestamp < monthEnd)
                 .ToList();
 
-            var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
-            var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
+            var actualMonthRvu = currentMonthRecords.Sum(r => GetPrimaryWorkUnit(r));
+            var actualMonthComp = currentMonthRecords.Sum(r => CalculateStudyCompensation(r));
             var actualMonthHours = CalculateMergedHours(currentMonthRecords);
 
             CheckAndResetMonthlyProjections();
@@ -1810,8 +1817,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var historicalEnd = monthStart;
             var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, historicalEnd);
             var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
-            var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
-            var historicalRvu = historicalRecords.Sum(r => r.Rvu);
+            var historicalComp = historicalRecords.Sum(r => CalculateStudyCompensation(r));
+            var historicalRvu = historicalRecords.Sum(r => GetPrimaryWorkUnit(r));
 
             // Fallback chain: historical 3-month → current month → current shift pace
             var fallbackHours = _shiftStart.HasValue ? Math.Max((DateTime.Now - _shiftStart.Value).TotalHours, 0) : 0;
@@ -2090,11 +2097,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private double CalculateStudyCompensation(StudyRecord record)
     {
-        // Use hardcoded compensation rates based on study completion time and role
-        return CompensationRates.CalculateCompensation(
-            record.Rvu,
-            record.TimeFinished ?? record.Timestamp,
-            _dataManager.Settings.Role);
+        var time = record.TimeFinished ?? record.Timestamp;
+        var role = _dataManager.Settings.Role;
+
+        if (CompensationRates.IsTbwuEra(time) && _tbwuLookup.IsAvailable)
+        {
+            // TBWU era: use TBWU value × TBWU-specific rates
+            return _tbwuLookup.CalculateTbwuCompensation(record, role);
+        }
+
+        // Pre-TBWU era: use RVU × RVU rates
+        return CompensationRates.CalculateCompensation(record.Rvu, time, role);
+    }
+
+    /// <summary>
+    /// Get the primary work unit value for a study (TBWU for April+ studies, RVU otherwise).
+    /// </summary>
+    private double GetPrimaryWorkUnit(StudyRecord record)
+    {
+        var time = record.TimeFinished ?? record.Timestamp;
+
+        if (CompensationRates.IsTbwuEra(time) && _tbwuLookup.IsAvailable)
+        {
+            return _tbwuLookup.GetTbwu(record.Procedure, record.PatientClass) ?? record.Rvu;
+        }
+
+        return record.Rvu;
     }
 
     // ===========================================
@@ -4181,6 +4209,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _teamSyncService?.Dispose();
         StopPipeClient();
         Utils.WindowExtraction.Cleanup();
+        _tbwuLookup.Dispose();
         _dataManager.Dispose();
         LoggingConfig.Shutdown();
     }

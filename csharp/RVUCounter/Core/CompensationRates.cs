@@ -1,11 +1,27 @@
 namespace RVUCounter.Core;
 
 /// <summary>
-/// Hardcoded compensation rates per RVU based on time of day, day type, and role.
+/// Hardcoded compensation rates per RVU/TBWU based on time of day, day type, and role.
 /// Rates vary by hour, weekday/weekend, and associate/partner status.
+/// Starting April 1, 2026, TBWU becomes the primary compensation metric with its own rate table.
 /// </summary>
 public static class CompensationRates
 {
+    /// <summary>
+    /// The date when TBWU becomes the primary compensation metric.
+    /// Studies on or after this date use TBWU rates; studies before use RVU rates.
+    /// </summary>
+    public static readonly DateTime TbwuCutoverDate = new(2026, 4, 1);
+
+    /// <summary>
+    /// Returns true if the given date falls in the TBWU era (on or after April 1, 2026).
+    /// </summary>
+    public static bool IsTbwuEra(DateTime dateTime) => dateTime >= TbwuCutoverDate;
+
+    // ===========================================
+    // RVU RATES (used for studies before April 1, 2026)
+    // ===========================================
+
     /// <summary>
     /// Weekday rates by role and hour (0-23).
     /// </summary>
@@ -28,7 +44,7 @@ public static class CompensationRates
     };
 
     /// <summary>
-    /// Weekend rates by role and hour (0-23).
+    /// Weekend RVU rates by role and hour (0-23).
     /// </summary>
     private static readonly Dictionary<string, int[]> WeekendRates = new()
     {
@@ -47,6 +63,72 @@ public static class CompensationRates
             34, 34, 34, 34, 36, 36, 36, 36, 38, 39, 41, 42
         }
     };
+
+    // ===========================================
+    // TBWU RATES (used for studies on or after April 1, 2026)
+    // ===========================================
+
+    private static readonly Dictionary<string, double[]> TbwuWeekdayRates = new()
+    {
+        ["assoc"] = new double[]
+        {
+            // 12am,  1am,   2am,   3am,   4am,   5am,   6am,   7am,   8am,   9am,   10am,  11am
+            42.77, 42.77, 44.96, 44.96, 44.96, 44.96, 42.77, 42.77, 31.80, 31.80, 31.80, 31.80,
+            // 12pm,  1pm,   2pm,   3pm,   4pm,   5pm,   6pm,   7pm,   8pm,   9pm,   10pm,  11pm
+            31.80, 31.80, 31.80, 31.80, 35.09, 35.09, 35.09, 35.09, 37.29, 38.38, 40.58, 41.67
+        },
+        ["partner"] = new double[]
+        {
+            // 12am,  1am,   2am,   3am,   4am,   5am,   6am,   7am,   8am,   9am,   10am,  11am
+            44.96, 44.96, 47.16, 47.16, 47.16, 47.16, 44.96, 44.96, 34.00, 34.00, 34.00, 34.00,
+            // 12pm,  1pm,   2pm,   3pm,   4pm,   5pm,   6pm,   7pm,   8pm,   9pm,   10pm,  11pm
+            34.00, 34.00, 34.00, 34.00, 37.29, 37.29, 37.29, 37.29, 39.48, 40.58, 42.77, 43.87
+        }
+    };
+
+    private static readonly Dictionary<string, double[]> TbwuWeekendRates = new()
+    {
+        ["assoc"] = new double[]
+        {
+            // 12am,  1am,   2am,   3am,   4am,   5am,   6am,   7am,   8am,   9am,   10am,  11am
+            44.96, 44.96, 47.16, 47.16, 47.16, 47.16, 44.96, 44.96, 35.09, 35.09, 35.09, 35.09,
+            // 12pm,  1pm,   2pm,   3pm,   4pm,   5pm,   6pm,   7pm,   8pm,   9pm,   10pm,  11pm
+            35.09, 35.09, 35.09, 35.09, 37.29, 37.29, 37.29, 37.29, 39.48, 40.58, 42.77, 43.87
+        },
+        ["partner"] = new double[]
+        {
+            // 12am,  1am,   2am,   3am,   4am,   5am,   6am,   7am,   8am,   9am,   10am,  11am
+            47.16, 47.16, 49.35, 49.35, 49.35, 49.35, 47.16, 47.16, 37.29, 37.29, 37.29, 37.29,
+            // 12pm,  1pm,   2pm,   3pm,   4pm,   5pm,   6pm,   7pm,   8pm,   9pm,   10pm,  11pm
+            37.29, 37.29, 37.29, 37.29, 39.48, 39.48, 39.48, 39.48, 41.67, 42.77, 44.96, 46.06
+        }
+    };
+
+    /// <summary>
+    /// Get the TBWU-specific compensation rate for a specific time and role.
+    /// </summary>
+    public static double GetTbwuRate(DateTime dateTime, string role)
+    {
+        var isWeekend = dateTime.DayOfWeek == DayOfWeek.Saturday ||
+                        dateTime.DayOfWeek == DayOfWeek.Sunday;
+        var roleKey = (role ?? "Associate").ToLowerInvariant().StartsWith("partner") ? "partner" : "assoc";
+        var hour = dateTime.Hour;
+
+        var rates = isWeekend ? TbwuWeekendRates : TbwuWeekdayRates;
+
+        if (rates.TryGetValue(roleKey, out var hourlyRates))
+            return hourlyRates[hour];
+
+        return 34.0;
+    }
+
+    /// <summary>
+    /// Get the TBWU-specific compensation rate for a specific time and role.
+    /// </summary>
+    public static double GetTbwuRate(DateTime dateTime, bool isPartner)
+    {
+        return GetTbwuRate(dateTime, isPartner ? "Partner" : "Associate");
+    }
 
     /// <summary>
     /// Get the compensation rate for a specific time and role.

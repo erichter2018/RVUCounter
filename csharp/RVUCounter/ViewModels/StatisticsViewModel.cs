@@ -250,9 +250,10 @@ public partial class StatisticsViewModel : ObservableObject
 
             // Refresh totals
             TotalStudies = AllStudiesData.Count;
-            TotalRvu = AllStudiesData.Sum(r => r.Rvu);
+            TotalRvu = _allRecords.Sum(r => GetPrimaryWorkUnit(r));
             AvgRvuPerStudy = TotalStudies > 0 ? TotalRvu / TotalStudies : 0;
-            SummaryText = $"Total: {TotalStudies} studies  |  {TotalRvu:F1} RVU  |  Avg: {AvgRvuPerStudy:F2} RVU/study";
+            var delLabel = GetPrimaryLabel(_allRecords);
+            SummaryText = $"Total: {TotalStudies} studies  |  {TotalRvu:F1} {delLabel}  |  Avg: {AvgRvuPerStudy:F2} {delLabel}/study";
 
             Log.Information("Deleted study record {RecordId}", row.RecordId);
         }
@@ -717,6 +718,88 @@ public partial class StatisticsViewModel : ObservableObject
     /// Calculate total worked hours from records by merging overlapping shift intervals.
     /// Reconciled shifts can overlap with real-time shifts; merging prevents double-counting.
     /// </summary>
+    /// <summary>
+    /// Calculate per-study date-aware compensation: TBWU rates for April+ studies, RVU rates for earlier.
+    /// </summary>
+    private double CalculateStudyCompensation(StudyRecord record, string role)
+    {
+        var time = record.TimeFinished ?? record.Timestamp;
+        if (CompensationRates.IsTbwuEra(time) && _tbwuLookup.IsAvailable)
+            return _tbwuLookup.CalculateTbwuCompensation(record, role);
+        return CompensationRates.CalculateCompensation(record.Rvu, time, role);
+    }
+
+    /// <summary>
+    /// Calculate total date-aware compensation for a set of records.
+    /// </summary>
+    private double CalculateTotalCompensation(IEnumerable<StudyRecord> records, string role)
+    {
+        return records.Sum(r => CalculateStudyCompensation(r, role));
+    }
+
+    /// <summary>
+    /// Get the primary work unit for a study (TBWU for April+ studies, RVU otherwise).
+    /// </summary>
+    private double GetPrimaryWorkUnit(StudyRecord record)
+    {
+        var time = record.TimeFinished ?? record.Timestamp;
+        if (CompensationRates.IsTbwuEra(time) && _tbwuLookup.IsAvailable)
+            return _tbwuLookup.GetTbwu(record.Procedure, record.PatientClass) ?? record.Rvu;
+        return record.Rvu;
+    }
+
+    /// <summary>
+    /// Get the alternate work unit for a study (RVU for April+ studies, TBWU otherwise).
+    /// </summary>
+    private double? GetAlternateWorkUnit(StudyRecord record)
+    {
+        var time = record.TimeFinished ?? record.Timestamp;
+        if (CompensationRates.IsTbwuEra(time))
+            return record.Rvu; // In TBWU era, RVU is the alternate
+        if (_tbwuLookup.IsAvailable)
+            return _tbwuLookup.GetTbwu(record.Procedure, record.PatientClass);
+        return null;
+    }
+
+    /// <summary>
+    /// Calculate alternate compensation for a study (the "other" metric).
+    /// </summary>
+    private double CalculateAlternateCompensation(StudyRecord record, string role)
+    {
+        var time = record.TimeFinished ?? record.Timestamp;
+        if (CompensationRates.IsTbwuEra(time))
+        {
+            // In TBWU era, alternate is RVU-based comp
+            return CompensationRates.CalculateCompensation(record.Rvu, time, role);
+        }
+        if (_tbwuLookup.IsAvailable)
+        {
+            // Pre-TBWU era, alternate is TBWU-based comp
+            return _tbwuLookup.CalculateTbwuCompensation(record, role);
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Get label for the primary work unit metric based on whether records are in the TBWU era.
+    /// </summary>
+    private string GetPrimaryLabel(IEnumerable<StudyRecord> records)
+    {
+        // Use the majority of records to determine label, or current date if no records
+        if (!records.Any())
+            return CompensationRates.IsTbwuEra(DateTime.Now) ? "TBWU" : "RVU";
+        var tbwuCount = records.Count(r => CompensationRates.IsTbwuEra(r.TimeFinished ?? r.Timestamp));
+        return tbwuCount > records.Count() / 2 ? "TBWU" : "RVU";
+    }
+
+    /// <summary>
+    /// Get label for the alternate work unit metric.
+    /// </summary>
+    private string GetAlternateLabel(IEnumerable<StudyRecord> records)
+    {
+        return GetPrimaryLabel(records) == "TBWU" ? "RVU" : "TBWU";
+    }
+
     private static double CalculateMergedHours(List<StudyRecord> records)
     {
         if (!records.Any()) return 0;
@@ -829,12 +912,13 @@ public partial class StatisticsViewModel : ObservableObject
         var rawRecords = GetRecordsForPeriod();
         var records = ExpandMultiAccessionRecords(rawRecords);
 
-        // Update summary stats
+        // Update summary stats — use primary work unit (TBWU for April+ studies, RVU for earlier)
         TotalStudies = records.Count;
-        TotalRvu = records.Sum(r => r.Rvu);
+        TotalRvu = records.Sum(r => GetPrimaryWorkUnit(r));
         AvgRvuPerStudy = TotalStudies > 0 ? TotalRvu / TotalStudies : 0;
 
-        SummaryText = $"Total: {TotalStudies} studies  |  {TotalRvu:F1} RVU  |  Avg: {AvgRvuPerStudy:F2} RVU/study";
+        var summaryLabel = GetPrimaryLabel(records);
+        SummaryText = $"Total: {TotalStudies} studies  |  {TotalRvu:F1} {summaryLabel}  |  Avg: {AvgRvuPerStudy:F2} {summaryLabel}/study";
 
         // Reset chart visibility (individual Display methods may override)
         ShowCartesianChart = false;
@@ -934,27 +1018,30 @@ public partial class StatisticsViewModel : ObservableObject
         }
 
         // ============ BASIC STATS ============
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
-        TableData.Add(new StatRow { Col1 = "Average RVU per Study", Col2 = $"{AvgRvuPerStudy:F2}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{records.Sum(r => GetPrimaryWorkUnit(r)):F1}" });
+        TableData.Add(new StatRow { Col1 = $"Average {primaryLabel} per Study", Col2 = $"{(TotalStudies > 0 ? records.Sum(r => GetPrimaryWorkUnit(r)) / TotalStudies : 0):F2}" });
 
         if (TotalStudies > 0)
         {
             var role = _dataManager.Settings.Role ?? "Partner";
             var hoursSpan = CalculateMergedHours(records);
-            // Calculate compensation using TimeFinished for rate lookup
-            var totalComp = records.Sum(r => Core.CompensationRates.CalculateCompensation(r.Rvu, r.TimeFinished ?? r.Timestamp, role));
+
+            // Primary compensation (date-aware per study)
+            var totalComp = CalculateTotalCompensation(records, role);
             var compPerHour = totalComp / hoursSpan;
 
-            // Hourly Compensation Rate
             TableData.Add(new StatRow { Col1 = "Hourly Compensation Rate", Col2 = $"${compPerHour:N2}/hr" });
 
-            // TBWU equivalent
+            // Alternate compensation
             if (_tbwuLookup.IsAvailable)
             {
-                var totalTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
-                var tbwuCompPerHour = totalTbwuComp / hoursSpan;
-                TableData.Add(new StatRow { Col1 = "Hourly Compensation Rate (TBWU)", Col2 = $"${tbwuCompPerHour:N2}/hr" });
+                var totalAltComp = records.Sum(r => CalculateAlternateCompensation(r, role));
+                var altCompPerHour = totalAltComp / hoursSpan;
+                TableData.Add(new StatRow { Col1 = $"Hourly Compensation Rate ({altLabel})", Col2 = $"${altCompPerHour:N2}/hr" });
             }
 
             // ============ COMPENSATION ============
@@ -962,8 +1049,8 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
             if (_tbwuLookup.IsAvailable)
             {
-                var summaryTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
-                TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${summaryTbwuComp:N0}" });
+                var totalAltComp = records.Sum(r => CalculateAlternateCompensation(r, role));
+                TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
             }
 
             // Projected Monthly Income (uses 3-month historical rates)
@@ -973,8 +1060,8 @@ public partial class StatisticsViewModel : ObservableObject
                 var monthEnd = monthStart.AddMonths(1);
                 var currentMonthRecords = _allRecords.Where(r => r.Timestamp >= monthStart && r.Timestamp < monthEnd).ToList();
 
-                var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
-                var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
+                var actualMonthComp = CalculateTotalCompensation(currentMonthRecords, role);
+                var actualMonthRvu = currentMonthRecords.Sum(r => GetPrimaryWorkUnit(r));
                 var shiftLength = _dataManager.Settings.ShiftLengthHours;
                 var actualMonthHours = CalculateMergedHours(currentMonthRecords);
 
@@ -988,7 +1075,7 @@ public partial class StatisticsViewModel : ObservableObject
                 var historicalStart = monthStart.AddMonths(-3);
                 var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, monthStart);
                 var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
-                var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
+                var historicalComp = CalculateTotalCompensation(historicalRecords, role);
 
                 // Fallback chain: historical 3-month → current month → selected period
                 var projCompPerHour = historicalHours > 0 ? historicalComp / historicalHours
@@ -1003,7 +1090,8 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
             TableData.Add(new StatRow { Col1 = "Time Span", Col2 = $"{hoursSpan:F1} hours" });
             TableData.Add(new StatRow { Col1 = "Studies per Hour", Col2 = $"{TotalStudies / hoursSpan:F1}" });
-            TableData.Add(new StatRow { Col1 = "RVU per Hour", Col2 = $"{TotalRvu / hoursSpan:F1}" });
+            var totalPrimaryWu = records.Sum(r => GetPrimaryWorkUnit(r));
+            TableData.Add(new StatRow { Col1 = $"{primaryLabel} per Hour", Col2 = $"{totalPrimaryWu / hoursSpan:F1}" });
 
             // ============ SHIFT STATS (based on selected period's records) ============
             // Group records by shift to get shift stats for just the selected period
@@ -1013,27 +1101,25 @@ public partial class StatisticsViewModel : ObservableObject
                 TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
                 TableData.Add(new StatRow { Col1 = "Total Shifts Completed", Col2 = shiftGroups.Count.ToString() });
 
-                // Find highest RVU shift and most efficient shift from the records in this period
                 var shiftStats = shiftGroups.Select(g => new
                 {
                     ShiftId = g.Key,
-                    TotalRvu = g.Sum(r => r.Rvu),
+                    TotalWu = g.Sum(r => GetPrimaryWorkUnit(r)),
                     StartTime = g.Min(r => r.Timestamp),
                     EndTime = g.Max(r => r.Timestamp),
                     Duration = (g.Max(r => r.Timestamp) - g.Min(r => r.Timestamp)).TotalHours
                 }).ToList();
 
-                var highestRvuShift = shiftStats.OrderByDescending(s => s.TotalRvu).FirstOrDefault();
-                if (highestRvuShift != null)
-                    TableData.Add(new StatRow { Col1 = "Highest RVU Shift", Col2 = $"{highestRvuShift.StartTime:MM/dd/yyyy}, {highestRvuShift.TotalRvu:F1} RVU" });
+                var highestWuShift = shiftStats.OrderByDescending(s => s.TotalWu).FirstOrDefault();
+                if (highestWuShift != null)
+                    TableData.Add(new StatRow { Col1 = $"Highest {primaryLabel} Shift", Col2 = $"{highestWuShift.StartTime:MM/dd/yyyy}, {highestWuShift.TotalWu:F1} {primaryLabel}" });
 
-                // Most efficient = highest RVU/hour
                 var mostEfficientShift = shiftStats
-                    .Select(s => new { s.StartTime, s.TotalRvu, RvuPerHour = s.TotalRvu / Math.Max(s.Duration, 1) })
-                    .OrderByDescending(x => x.RvuPerHour)
+                    .Select(s => new { s.StartTime, s.TotalWu, WuPerHour = s.TotalWu / Math.Max(s.Duration, 1) })
+                    .OrderByDescending(x => x.WuPerHour)
                     .FirstOrDefault();
                 if (mostEfficientShift != null)
-                    TableData.Add(new StatRow { Col1 = "Most Efficient Shift", Col2 = $"{mostEfficientShift.StartTime:MM/dd/yyyy}, {mostEfficientShift.RvuPerHour:F1} RVU/hr" });
+                    TableData.Add(new StatRow { Col1 = "Most Efficient Shift", Col2 = $"{mostEfficientShift.StartTime:MM/dd/yyyy}, {mostEfficientShift.WuPerHour:F1} {primaryLabel}/hr" });
             }
 
             // ============ HOURLY ANALYSIS ============
@@ -1046,12 +1132,12 @@ public partial class StatisticsViewModel : ObservableObject
             if (hourGroups.Any())
             {
                 var busiestHour = hourGroups.OrderByDescending(g => g.Count()).FirstOrDefault();
-                var mostProductiveHour = hourGroups.OrderByDescending(g => g.Sum(r => r.Rvu)).FirstOrDefault();
+                var mostProductiveHour = hourGroups.OrderByDescending(g => g.Sum(r => GetPrimaryWorkUnit(r))).FirstOrDefault();
 
                 if (busiestHour != null)
                     TableData.Add(new StatRow { Col1 = "Busiest Hour", Col2 = $"{FormatHour(busiestHour.Key)} ({busiestHour.Count()} studies)" });
                 if (mostProductiveHour != null)
-                    TableData.Add(new StatRow { Col1 = "Most Productive Hour", Col2 = $"{FormatHour(mostProductiveHour.Key)} ({mostProductiveHour.Sum(r => r.Rvu):F1} RVU)" });
+                    TableData.Add(new StatRow { Col1 = "Most Productive Hour", Col2 = $"{FormatHour(mostProductiveHour.Key)} ({mostProductiveHour.Sum(r => GetPrimaryWorkUnit(r)):F1} {primaryLabel})" });
 
                 // Fastest hour (lowest avg time per study)
                 var recordsWithDuration = records.Where(r => r.DurationSeconds > 0).ToList();
@@ -1225,8 +1311,11 @@ public partial class StatisticsViewModel : ObservableObject
 
         var role = _dataManager.Settings.Role;
 
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+
         // Group by hour
-        var hourData = new Dictionary<int, (int studies, double rvu, double comp)>();
+        var hourData = new Dictionary<int, (int studies, double wu, double comp)>();
         foreach (var record in records)
         {
             var hour = (record.TimeFinished ?? record.Timestamp).Hour;
@@ -1234,8 +1323,8 @@ public partial class StatisticsViewModel : ObservableObject
                 hourData[hour] = (0, 0, 0);
 
             var current = hourData[hour];
-            var comp = CompensationRates.CalculateCompensation(record.Rvu, record.TimeFinished ?? record.Timestamp, role);
-            hourData[hour] = (current.studies + 1, current.rvu + record.Rvu, current.comp + comp);
+            var comp = CalculateStudyCompensation(record, role);
+            hourData[hour] = (current.studies + 1, current.wu + GetPrimaryWorkUnit(record), current.comp + comp);
         }
 
         // Sort hours starting from shift start
@@ -1248,37 +1337,37 @@ public partial class StatisticsViewModel : ObservableObject
                 sortedHours.Add(hour);
         }
 
-        var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
-        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+        var totalComp = CalculateTotalCompensation(records, role);
+        var totalAltComp = _tbwuLookup.IsAvailable ? records.Sum(r => CalculateAlternateCompensation(r, role)) : 0.0;
 
-        // Build per-hour TBWU comp data
-        var hourTbwuComp = new Dictionary<int, double>();
+        // Build per-hour alternate comp data
+        var hourAltComp = new Dictionary<int, double>();
         if (_tbwuLookup.IsAvailable)
         {
             foreach (var record in records)
             {
                 var hour = (record.TimeFinished ?? record.Timestamp).Hour;
-                if (!hourTbwuComp.ContainsKey(hour))
-                    hourTbwuComp[hour] = 0;
-                hourTbwuComp[hour] += _tbwuLookup.CalculateTbwuCompensation(record, role);
+                if (!hourAltComp.ContainsKey(hour))
+                    hourAltComp[hour] = 0;
+                hourAltComp[hour] += CalculateAlternateCompensation(record, role);
             }
         }
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{records.Sum(r => GetPrimaryWorkUnit(r)):F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
 
         if (hourData.Any())
         {
-            var peakHour = hourData.OrderByDescending(h => h.Value.rvu).FirstOrDefault();
+            var peakHour = hourData.OrderByDescending(h => h.Value.wu).FirstOrDefault();
             if (peakHour.Value != default)
             {
                 var peakHour12 = peakHour.Key % 12 == 0 ? 12 : peakHour.Key % 12;
-                TableData.Add(new StatRow { Col1 = "Peak Hour", Col2 = $"{peakHour12}{(peakHour.Key < 12 ? "AM" : "PM")} ({peakHour.Value.rvu:F1} RVU)" });
+                TableData.Add(new StatRow { Col1 = "Peak Hour", Col2 = $"{peakHour12}{(peakHour.Key < 12 ? "AM" : "PM")} ({peakHour.Value.wu:F1} {primaryLabel})" });
             }
         }
 
@@ -1291,9 +1380,9 @@ public partial class StatisticsViewModel : ObservableObject
             var data = hourData[hour];
             int hour12 = hour % 12 == 0 ? 12 : hour % 12;
             string amPm = hour < 12 ? "AM" : "PM";
-            var compStr = $"{data.studies} studies, {data.rvu:F1} RVU, ${data.comp:N0}";
-            if (_tbwuLookup.IsAvailable && hourTbwuComp.TryGetValue(hour, out var tbwuC))
-                compStr += $" (TBWU: ${tbwuC:N0})";
+            var compStr = $"{data.studies} studies, {data.wu:F1} {primaryLabel}, ${data.comp:N0}";
+            if (_tbwuLookup.IsAvailable && hourAltComp.TryGetValue(hour, out var altC))
+                compStr += $" ({altLabel}: ${altC:N0})";
             TableData.Add(new StatRow
             {
                 Col1 = $"  {hour12}{amPm}",
@@ -1303,16 +1392,17 @@ public partial class StatisticsViewModel : ObservableObject
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        var totalStr = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        var totalWu = records.Sum(r => GetPrimaryWorkUnit(r));
+        var totalStr = $"{TotalStudies} studies, {totalWu:F1} {primaryLabel}, ${totalComp:N0}";
         if (_tbwuLookup.IsAvailable)
-            totalStr += $" (TBWU: ${totalTbwuComp:N0})";
+            totalStr += $" ({altLabel}: ${totalAltComp:N0})";
         TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalStr, IsTotal = true });
 
         // Build horizontal bar chart for side panel
         if (sortedHours.Any())
         {
-            var maxRvu = sortedHours.Max(h => hourData[h].rvu);
-            var avgRvu = sortedHours.Average(h => hourData[h].rvu);
+            var maxRvu = sortedHours.Max(h => hourData[h].wu);
+            var avgRvu = sortedHours.Average(h => hourData[h].wu);
 
             // Reverse so shift start (first hour) is at TOP of chart (RowSeries renders index 0 at bottom)
             var displayHours = new List<int>(sortedHours);
@@ -1324,7 +1414,7 @@ public partial class StatisticsViewModel : ObservableObject
                 return $"{h12}{(h < 12 ? "AM" : "PM")}";
             }).ToArray();
 
-            var values = displayHours.Select(h => hourData[h].rvu).ToArray();
+            var values = displayHours.Select(h => hourData[h].wu).ToArray();
 
             // Build study count lookup for data labels
             var studyCounts = displayHours.Select(h => hourData[h].studies).ToArray();
@@ -1421,31 +1511,35 @@ public partial class StatisticsViewModel : ObservableObject
 
         var role = _dataManager.Settings.Role;
 
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+
         // Group by modality with compensation
         var modalityData = records.GroupBy(r => ExtractModality(r.StudyType))
             .Select(g => new
             {
                 Modality = g.Key,
                 Studies = g.Count(),
-                Rvu = g.Sum(r => r.Rvu),
-                Comp = CompensationRates.CalculateTotalCompensation(g, role),
+                Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                Comp = CalculateTotalCompensation(g, role),
                 AvgTime = g.Where(r => r.DurationSeconds > 0).Any()
                     ? g.Where(r => r.DurationSeconds > 0).Average(r => r.DurationSeconds) : null
             })
-            .OrderByDescending(m => m.Rvu)
+            .OrderByDescending(m => m.Wu)
             .ToList();
 
         var totalComp = modalityData.Sum(m => m.Comp);
+        var totalWu = modalityData.Sum(m => m.Wu);
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
         if (_tbwuLookup.IsAvailable)
         {
-            var totalTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+            var totalAltComp = records.Sum(r => CalculateAlternateCompensation(r, role));
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
         }
         TableData.Add(new StatRow { Col1 = "Modalities", Col2 = modalityData.Count.ToString() });
 
@@ -1455,14 +1549,13 @@ public partial class StatisticsViewModel : ObservableObject
 
         foreach (var m in modalityData)
         {
-            var pctRvu = TotalRvu > 0 ? (m.Rvu / TotalRvu * 100) : 0;
-            var compStr = $"{m.Studies} studies, {m.Rvu:F1} RVU ({pctRvu:F0}%), ${m.Comp:N0}";
+            var pctWu = totalWu > 0 ? (m.Wu / totalWu * 100) : 0;
+            var compStr = $"{m.Studies} studies, {m.Wu:F1} {primaryLabel} ({pctWu:F0}%), ${m.Comp:N0}";
             if (_tbwuLookup.IsAvailable)
             {
-                // Get records for this modality group to calculate TBWU comp
                 var modalityRecords = records.Where(r => ExtractModality(r.StudyType) == m.Modality);
-                var tbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(modalityRecords, role);
-                compStr += $" (TBWU: ${tbwuComp:N0})";
+                var altComp = modalityRecords.Sum(r => CalculateAlternateCompensation(r, role));
+                compStr += $" ({altLabel}: ${altComp:N0})";
             }
             TableData.Add(new StatRow
             {
@@ -1488,11 +1581,11 @@ public partial class StatisticsViewModel : ObservableObject
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        var totalLineModality = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        var totalLineModality = $"{TotalStudies} studies, {totalWu:F1} {primaryLabel}, ${totalComp:N0}";
         if (_tbwuLookup.IsAvailable)
         {
-            var totalTbwuCompMod = _tbwuLookup.CalculateTotalTbwuCompensation(records, role);
-            totalLineModality += $" (TBWU: ${totalTbwuCompMod:N0})";
+            var totalAltCompMod = records.Sum(r => CalculateAlternateCompensation(r, role));
+            totalLineModality += $" ({altLabel}: ${totalAltCompMod:N0})";
         }
         TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineModality, IsTotal = true });
 
@@ -1503,8 +1596,8 @@ public partial class StatisticsViewModel : ObservableObject
             var color = GetModalityColor(m.Modality);
             seriesList.Add(new PieSeries<double>
             {
-                Values = new double[] { m.Rvu },
-                Name = $"{m.Modality}: {m.Rvu:F1}",
+                Values = new double[] { m.Wu },
+                Name = $"{m.Modality}: {m.Wu:F1}",
                 Fill = new SolidColorPaint(color),
                 DataLabelsSize = 0
             });
@@ -1536,6 +1629,9 @@ public partial class StatisticsViewModel : ObservableObject
 
         var role = _dataManager.Settings.Role;
 
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+
         // Group by study type with compensation
         var typeData = records.GroupBy(r =>
             {
@@ -1551,22 +1647,23 @@ public partial class StatisticsViewModel : ObservableObject
             {
                 StudyType = g.Key,
                 Studies = g.Count(),
-                Rvu = g.Sum(r => r.Rvu),
-                Comp = CompensationRates.CalculateTotalCompensation(g, role)
+                Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                Comp = CalculateTotalCompensation(g, role)
             })
-            .OrderByDescending(t => t.Rvu)
+            .OrderByDescending(t => t.Wu)
             .ToList();
 
         var totalComp = typeData.Sum(t => t.Comp);
-        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+        var totalWu = typeData.Sum(t => t.Wu);
+        var totalAltComp = _tbwuLookup.IsAvailable ? records.Sum(r => CalculateAlternateCompensation(r, role)) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
         TableData.Add(new StatRow { Col1 = "Unique Study Types", Col2 = typeData.Count.ToString() });
 
         // ============ TOP STUDY TYPES ============
@@ -1575,20 +1672,19 @@ public partial class StatisticsViewModel : ObservableObject
 
         foreach (var t in typeData)
         {
-            var pctRvu = TotalRvu > 0 ? (t.Rvu / TotalRvu * 100) : 0;
+            var pctWu = totalWu > 0 ? (t.Wu / totalWu * 100) : 0;
             TableData.Add(new StatRow
             {
                 Col1 = $"  {t.StudyType}",
-                Col2 = $"{t.Studies} studies, {t.Rvu:F1} RVU ({pctRvu:F0}%), ${t.Comp:N0}"
+                Col2 = $"{t.Studies} studies, {t.Wu:F1} {primaryLabel} ({pctWu:F0}%), ${t.Comp:N0}"
             });
         }
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        var totalAvg = TotalStudies > 0 ? TotalRvu / TotalStudies : 0;
-        var totalLineStudyType = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        var totalLineStudyType = $"{TotalStudies} studies, {totalWu:F1} {primaryLabel}, ${totalComp:N0}";
         if (_tbwuLookup.IsAvailable)
-            totalLineStudyType += $" (TBWU: ${totalTbwuComp:N0})";
+            totalLineStudyType += $" ({altLabel}: ${totalAltComp:N0})";
         TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineStudyType, IsTotal = true });
     }
 
@@ -1601,7 +1697,9 @@ public partial class StatisticsViewModel : ObservableObject
         ShowSideBarChart = false;
         ShowSecondChart = false;
         ShowModalityToggle = false;
-        SideChartTitle = "RVU by Patient Class";
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+        SideChartTitle = $"{primaryLabel} by Patient Class";
 
         Col1Header = "Metric";
         Col2Header = "Value";
@@ -1627,22 +1725,23 @@ public partial class StatisticsViewModel : ObservableObject
             {
                 PatientClass = g.Key,
                 Studies = g.Count(),
-                Rvu = g.Sum(r => r.Rvu),
-                Comp = CompensationRates.CalculateTotalCompensation(g, role)
+                Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                Comp = CalculateTotalCompensation(g, role)
             })
-            .OrderByDescending(c => c.Rvu)
+            .OrderByDescending(c => c.Wu)
             .ToList();
 
         var totalComp = classData.Sum(c => c.Comp);
-        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+        var totalWu = classData.Sum(c => c.Wu);
+        var totalAltComp = _tbwuLookup.IsAvailable ? records.Sum(r => CalculateAlternateCompensation(r, role)) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
 
         // ============ BY PATIENT CLASS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
@@ -1650,13 +1749,14 @@ public partial class StatisticsViewModel : ObservableObject
 
         foreach (var c in classData)
         {
-            var pctRvu = TotalRvu > 0 ? (c.Rvu / TotalRvu * 100) : 0;
-            var classCompStr = $"{c.Studies} studies, {c.Rvu:F1} RVU ({pctRvu:F0}%), ${c.Comp:N0}";
+            var pctWu = totalWu > 0 ? (c.Wu / totalWu * 100) : 0;
+            var classCompStr = $"{c.Studies} studies, {c.Wu:F1} {primaryLabel} ({pctWu:F0}%), ${c.Comp:N0}";
             if (_tbwuLookup.IsAvailable)
             {
-                var classTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
-                    records.Where(r => (string.IsNullOrWhiteSpace(r.PatientClass) ? "(Unknown)" : r.PatientClass) == c.PatientClass), role);
-                classCompStr += $" (TBWU: ${classTbwuComp:N0})";
+                var classAltComp = records
+                    .Where(r => (string.IsNullOrWhiteSpace(r.PatientClass) ? "(Unknown)" : r.PatientClass) == c.PatientClass)
+                    .Sum(r => CalculateAlternateCompensation(r, role));
+                classCompStr += $" ({altLabel}: ${classAltComp:N0})";
             }
             TableData.Add(new StatRow
             {
@@ -1702,10 +1802,10 @@ public partial class StatisticsViewModel : ObservableObject
             {
                 Location = g.Key,
                 Studies = g.Count(),
-                Rvu = g.Sum(r => r.Rvu),
-                Comp = CompensationRates.CalculateTotalCompensation(g, role)
+                Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                Comp = CalculateTotalCompensation(g, role)
             })
-            .OrderByDescending(l => l.Rvu)
+            .OrderByDescending(l => l.Wu)
             .ToList();
 
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
@@ -1713,19 +1813,19 @@ public partial class StatisticsViewModel : ObservableObject
 
         foreach (var l in locationData)
         {
-            var pctRvu = TotalRvu > 0 ? (l.Rvu / TotalRvu * 100) : 0;
+            var pctWu = totalWu > 0 ? (l.Wu / totalWu * 100) : 0;
             TableData.Add(new StatRow
             {
                 Col1 = $"  {l.Location}",
-                Col2 = $"{l.Studies} studies, {l.Rvu:F1} RVU ({pctRvu:F0}%), ${l.Comp:N0}"
+                Col2 = $"{l.Studies} studies, {l.Wu:F1} {primaryLabel} ({pctWu:F0}%), ${l.Comp:N0}"
             });
         }
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        var totalLinePatientClass = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        var totalLinePatientClass = $"{TotalStudies} studies, {totalWu:F1} {primaryLabel}, ${totalComp:N0}";
         if (_tbwuLookup.IsAvailable)
-            totalLinePatientClass += $" (TBWU: ${totalTbwuComp:N0})";
+            totalLinePatientClass += $" ({altLabel}: ${totalAltComp:N0})";
         TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLinePatientClass, IsTotal = true });
 
         // Populate Pie Chart for side panel
@@ -1744,8 +1844,8 @@ public partial class StatisticsViewModel : ObservableObject
             var color = classColors.GetValueOrDefault(c.PatientClass, new SKColor(52, 168, 83));
             seriesList.Add(new PieSeries<double>
             {
-                Values = new double[] { c.Rvu },
-                Name = $"{c.PatientClass}: {c.Rvu:F1}",
+                Values = new double[] { c.Wu },
+                Name = $"{c.PatientClass}: {c.Wu:F1}",
                 Fill = new SolidColorPaint(color),
                 DataLabelsSize = 0
             });
@@ -1854,6 +1954,8 @@ public partial class StatisticsViewModel : ObservableObject
         var monthlyTarget = _dataManager.Settings.MonthlyRvuTarget;
         var shiftLength = _dataManager.Settings.ShiftLengthHours;
 
+        var primaryLabel = GetPrimaryLabel(records);
+
         // ============ CURRENT PERIOD STATS ============
         TableData.Add(new StatRow { Col1 = "CURRENT PERIOD", Col2 = "", IsHeader = true });
 
@@ -1863,21 +1965,22 @@ public partial class StatisticsViewModel : ObservableObject
         }
         else
         {
-            var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
+            var totalComp = CalculateTotalCompensation(records, role);
+            var totalWu = records.Sum(r => GetPrimaryWorkUnit(r));
             var totalHours = CalculateMergedHours(records);
             var days = Math.Max((records.Max(r => r.Timestamp) - records.Min(r => r.Timestamp)).TotalDays, 1);
 
             TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-            TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+            TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
             TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
             TableData.Add(new StatRow { Col1 = "Time Span", Col2 = $"{days:F1} days ({totalHours:F1} hours)" });
 
-            var rvuPerHour = TotalRvu / totalHours;
-            var rvuPerDay = TotalRvu / days;
+            var wuPerHour = totalWu / totalHours;
+            var wuPerDay = totalWu / days;
             var compPerHour = totalComp / totalHours;
 
-            TableData.Add(new StatRow { Col1 = "RVU/Hour", Col2 = $"{rvuPerHour:F1}" });
-            TableData.Add(new StatRow { Col1 = "RVU/Day", Col2 = $"{rvuPerDay:F1}" });
+            TableData.Add(new StatRow { Col1 = $"{primaryLabel}/Hour", Col2 = $"{wuPerHour:F1}" });
+            TableData.Add(new StatRow { Col1 = $"{primaryLabel}/Day", Col2 = $"{wuPerDay:F1}" });
             TableData.Add(new StatRow { Col1 = "Comp/Hour", Col2 = $"${compPerHour:N0}" });
 
             // ============ PROJECTIONS ============
@@ -1886,48 +1989,48 @@ public partial class StatisticsViewModel : ObservableObject
 
             // Weekly (5 work days, ~45 hours)
             var weeklyHours = 5 * shiftLength;
-            var weeklyRvu = rvuPerHour * weeklyHours;
+            var weeklyWu = wuPerHour * weeklyHours;
             var weeklyComp = compPerHour * weeklyHours;
-            TableData.Add(new StatRow { Col1 = "Weekly (5 days)", Col2 = $"{weeklyRvu:F0} RVU, ${weeklyComp:N0}" });
+            TableData.Add(new StatRow { Col1 = "Weekly (5 days)", Col2 = $"{weeklyWu:F0} {primaryLabel}, ${weeklyComp:N0}" });
 
             // Monthly (20 work days)
             var monthlyHours = 20 * shiftLength;
-            var monthlyRvu = rvuPerHour * monthlyHours;
+            var monthlyWu = wuPerHour * monthlyHours;
             var monthlyComp = compPerHour * monthlyHours;
-            TableData.Add(new StatRow { Col1 = "Monthly (20 days)", Col2 = $"{monthlyRvu:N0} RVU, ${monthlyComp:N0}" });
+            TableData.Add(new StatRow { Col1 = "Monthly (20 days)", Col2 = $"{monthlyWu:N0} {primaryLabel}, ${monthlyComp:N0}" });
 
             // Annual (240 work days)
             var annualHours = 240 * shiftLength;
-            var annualRvu = rvuPerHour * annualHours;
+            var annualWu = wuPerHour * annualHours;
             var annualComp = compPerHour * annualHours;
-            TableData.Add(new StatRow { Col1 = "Annual (240 days)", Col2 = $"{annualRvu:N0} RVU, ${annualComp:N0}" });
+            TableData.Add(new StatRow { Col1 = "Annual (240 days)", Col2 = $"{annualWu:N0} {primaryLabel}, ${annualComp:N0}" });
 
             // ============ TARGET ANALYSIS ============
             if (monthlyTarget > 0)
             {
                 TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
                 TableData.Add(new StatRow { Col1 = "TARGET ANALYSIS", Col2 = "", IsHeader = true });
-                TableData.Add(new StatRow { Col1 = "Monthly Target", Col2 = $"{monthlyTarget:N0} RVU" });
+                TableData.Add(new StatRow { Col1 = "Monthly Target", Col2 = $"{monthlyTarget:N0} {primaryLabel}" });
 
-                var pctOfTarget = (monthlyRvu / monthlyTarget) * 100;
-                TableData.Add(new StatRow { Col1 = "Projected vs Target", Col2 = $"{pctOfTarget:F0}% ({monthlyRvu:N0}/{monthlyTarget:N0})" });
+                var pctOfTarget = (monthlyWu / monthlyTarget) * 100;
+                TableData.Add(new StatRow { Col1 = "Projected vs Target", Col2 = $"{pctOfTarget:F0}% ({monthlyWu:N0}/{monthlyTarget:N0})" });
 
-                if (monthlyRvu < monthlyTarget)
+                if (monthlyWu < monthlyTarget)
                 {
-                    var deficit = monthlyTarget - monthlyRvu;
-                    var extraHoursNeeded = deficit / rvuPerHour;
-                    TableData.Add(new StatRow { Col1 = "Shortfall", Col2 = $"{deficit:F0} RVU ({extraHoursNeeded:F1} extra hours needed)" });
+                    var deficit = monthlyTarget - monthlyWu;
+                    var extraHoursNeeded = deficit / wuPerHour;
+                    TableData.Add(new StatRow { Col1 = "Shortfall", Col2 = $"{deficit:F0} {primaryLabel} ({extraHoursNeeded:F1} extra hours needed)" });
                 }
                 else
                 {
-                    var surplus = monthlyRvu - monthlyTarget;
-                    TableData.Add(new StatRow { Col1 = "Surplus", Col2 = $"+{surplus:F0} RVU above target" });
+                    var surplus = monthlyWu - monthlyTarget;
+                    TableData.Add(new StatRow { Col1 = "Surplus", Col2 = $"+{surplus:F0} {primaryLabel} above target" });
                 }
             }
 
             // ============ TOTALS ============
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = "PROJECTED ANNUAL", Col2 = $"{annualRvu:N0} RVU, ${annualComp:N0}", IsTotal = true });
+            TableData.Add(new StatRow { Col1 = "PROJECTED ANNUAL", Col2 = $"{annualWu:N0} {primaryLabel}, ${annualComp:N0}", IsTotal = true });
         }
     }
 
@@ -2003,19 +2106,23 @@ public partial class StatisticsViewModel : ObservableObject
         var role = _dataManager.Settings.Role;
         var monthlyTarget = _dataManager.Settings.MonthlyRvuTarget;
 
-        // Calculate total compensation using per-record rates
-        var totalComp = CompensationRates.CalculateTotalCompensation(records, role);
-        var avgCompPerRvu = TotalRvu > 0 ? totalComp / TotalRvu : 0;
-        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
-        var totalTbwu = _tbwuLookup.IsAvailable ? _tbwuLookup.GetTotalTbwu(records) : 0.0;
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
 
-        // ============ RVU Summary ============
-        TableData.Add(new StatRow { Col1 = "RVU SUMMARY", Col2 = "", IsHeader = true });
+        // Calculate total compensation using per-record date-aware rates
+        var totalComp = CalculateTotalCompensation(records, role);
+        var totalWu = records.Sum(r => GetPrimaryWorkUnit(r));
+        var avgCompPerWu = totalWu > 0 ? totalComp / totalWu : 0;
+        var totalAltComp = _tbwuLookup.IsAvailable ? records.Sum(r => CalculateAlternateCompensation(r, role)) : 0.0;
+        var totalAltWu = _tbwuLookup.IsAvailable ? records.Sum(r => GetAlternateWorkUnit(r) ?? 0) : 0.0;
+
+        // ============ Work Unit Summary ============
+        TableData.Add(new StatRow { Col1 = $"{primaryLabel} SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total TBWU", Col2 = $"{totalTbwu:F1}" });
-        TableData.Add(new StatRow { Col1 = "Avg RVU/Study", Col2 = $"{AvgRvuPerStudy:F2}" });
+            TableData.Add(new StatRow { Col1 = $"Total {altLabel}", Col2 = $"{totalAltWu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Avg {primaryLabel}/Study", Col2 = $"{(TotalStudies > 0 ? totalWu / TotalStudies : 0):F2}" });
 
         // ============ Compensation ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
@@ -2024,8 +2131,8 @@ public partial class StatisticsViewModel : ObservableObject
         TableData.Add(new StatRow { Col1 = $"Role", Col2 = role });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N2}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N2}" });
-        TableData.Add(new StatRow { Col1 = "Avg $/RVU", Col2 = $"${avgCompPerRvu:F2}" });
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N2}" });
+        TableData.Add(new StatRow { Col1 = $"Avg $/{primaryLabel}", Col2 = $"${avgCompPerWu:F2}" });
 
         if (TotalStudies > 0)
         {
@@ -2035,8 +2142,8 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = "Hours Worked", Col2 = $"{hoursSpan:F1}" });
             TableData.Add(new StatRow { Col1 = "Comp/Hour", Col2 = $"${totalComp / hoursSpan:N2}" });
             if (_tbwuLookup.IsAvailable)
-                TableData.Add(new StatRow { Col1 = "Comp/Hour (TBWU)", Col2 = $"${totalTbwuComp / hoursSpan:N2}" });
-            TableData.Add(new StatRow { Col1 = "RVU/Hour", Col2 = $"{TotalRvu / hoursSpan:F1}" });
+                TableData.Add(new StatRow { Col1 = $"Comp/Hour ({altLabel})", Col2 = $"${totalAltComp / hoursSpan:N2}" });
+            TableData.Add(new StatRow { Col1 = $"{primaryLabel}/Hour", Col2 = $"{totalWu / hoursSpan:F1}" });
             TableData.Add(new StatRow { Col1 = "Studies/Hour", Col2 = $"{TotalStudies / hoursSpan:F1}" });
 
             // ============ Projected Income ============
@@ -2052,8 +2159,8 @@ public partial class StatisticsViewModel : ObservableObject
             var currentMonthRecords = _allRecords.Where(r => r.Timestamp >= monthStart && r.Timestamp < monthEnd).ToList();
 
             // Calculate actual this month
-            var actualMonthRvu = currentMonthRecords.Sum(r => r.Rvu);
-            var actualMonthComp = CompensationRates.CalculateTotalCompensation(currentMonthRecords, role);
+            var actualMonthWu = currentMonthRecords.Sum(r => GetPrimaryWorkUnit(r));
+            var actualMonthComp = CalculateTotalCompensation(currentMonthRecords, role);
 
             // Calculate actual hours worked with 9-hour rounding for qualifying shifts
             var shiftLength = _dataManager.Settings.ShiftLengthHours;
@@ -2087,23 +2194,23 @@ public partial class StatisticsViewModel : ObservableObject
             var historicalStart = monthStart.AddMonths(-3);
             var historicalRecords = _dataManager.Database.GetRecordsInDateRange(historicalStart, monthStart);
             var historicalHours = historicalRecords.Count > 0 ? CalculateMergedHours(historicalRecords) : 0;
-            var historicalComp = CompensationRates.CalculateTotalCompensation(historicalRecords, role);
-            var historicalRvu = historicalRecords.Sum(r => r.Rvu);
+            var historicalComp = CalculateTotalCompensation(historicalRecords, role);
+            var historicalWu = historicalRecords.Sum(r => GetPrimaryWorkUnit(r));
 
             // Fallback chain: historical 3-month → current month → selected period
             var compPerHour = historicalHours > 0 ? historicalComp / historicalHours
                             : actualMonthHours > 0 ? actualMonthComp / actualMonthHours
                             : hoursSpan > 0 ? totalComp / hoursSpan : 0;
-            var rvuPerHour = historicalHours > 0 ? historicalRvu / historicalHours
-                           : actualMonthHours > 0 ? actualMonthRvu / actualMonthHours
-                           : hoursSpan > 0 ? TotalRvu / hoursSpan : 0;
+            var wuPerHour = historicalHours > 0 ? historicalWu / historicalHours
+                           : actualMonthHours > 0 ? actualMonthWu / actualMonthHours
+                           : hoursSpan > 0 ? totalWu / hoursSpan : 0;
 
             // Project remaining
             var projectedRemainingComp = compPerHour * remainingHours;
-            var projectedRemainingRvu = rvuPerHour * remainingHours;
+            var projectedRemainingWu = wuPerHour * remainingHours;
 
             // Total projected for month = actual + remaining
-            var projectedMonthlyRvu = actualMonthRvu + projectedRemainingRvu;
+            var projectedMonthlyWu = actualMonthWu + projectedRemainingWu;
             var projectedMonthlyComp = actualMonthComp + projectedRemainingComp;
             var projectedAnnualComp = projectedMonthlyComp * 12;
 
@@ -2115,37 +2222,37 @@ public partial class StatisticsViewModel : ObservableObject
             TableData.Add(new StatRow { Col1 = "Remaining Hours", Col2 = $"{remainingHours:F1}" });
 
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName}", Col2 = $"${actualMonthComp:N0} ({actualMonthRvu:F1} RVU)" });
-            TableData.Add(new StatRow { Col1 = "Projected Remaining", Col2 = $"${projectedRemainingComp:N0} ({projectedRemainingRvu:F1} RVU)" });
+            TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName}", Col2 = $"${actualMonthComp:N0} ({actualMonthWu:F1} {primaryLabel})" });
+            TableData.Add(new StatRow { Col1 = "Projected Remaining", Col2 = $"${projectedRemainingComp:N0} ({projectedRemainingWu:F1} {primaryLabel})" });
             TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-            TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} RVU", Col2 = $"{projectedMonthlyRvu:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} {primaryLabel}", Col2 = $"{projectedMonthlyWu:N0}" });
             TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income", Col2 = $"${projectedMonthlyComp:N0}" });
             TableData.Add(new StatRow { Col1 = "Projected Annual Income", Col2 = $"${projectedAnnualComp:N0}" });
 
-            // TBWU projected income (also uses historical rates)
+            // Alternate projected income (also uses historical rates)
             if (_tbwuLookup.IsAvailable)
             {
-                var actualMonthTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(currentMonthRecords, role);
-                var historicalTbwuComp = historicalHours > 0 ? _tbwuLookup.CalculateTotalTbwuCompensation(historicalRecords, role) : 0;
-                var tbwuCompPerHour = historicalHours > 0 ? historicalTbwuComp / historicalHours
-                                   : actualMonthHours > 0 ? actualMonthTbwuComp / actualMonthHours
-                                   : hoursSpan > 0 ? totalTbwuComp / hoursSpan : 0;
-                var projectedRemainingTbwuComp = tbwuCompPerHour * remainingHours;
-                var projectedMonthlyTbwuComp = actualMonthTbwuComp + projectedRemainingTbwuComp;
-                var projectedAnnualTbwuComp = projectedMonthlyTbwuComp * 12;
+                var actualMonthAltComp = currentMonthRecords.Sum(r => CalculateAlternateCompensation(r, role));
+                var historicalAltComp = historicalHours > 0 ? historicalRecords.Sum(r => CalculateAlternateCompensation(r, role)) : 0;
+                var altCompPerHour = historicalHours > 0 ? historicalAltComp / historicalHours
+                                   : actualMonthHours > 0 ? actualMonthAltComp / actualMonthHours
+                                   : hoursSpan > 0 ? totalAltComp / hoursSpan : 0;
+                var projectedRemainingAltComp = altCompPerHour * remainingHours;
+                var projectedMonthlyAltComp = actualMonthAltComp + projectedRemainingAltComp;
+                var projectedAnnualAltComp = projectedMonthlyAltComp * 12;
 
                 TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-                TableData.Add(new StatRow { Col1 = "TBWU PROJECTED INCOME", Col2 = "", IsHeader = true });
-                TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName} (TBWU)", Col2 = $"${actualMonthTbwuComp:N0}" });
-                TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income (TBWU)", Col2 = $"${projectedMonthlyTbwuComp:N0}" });
-                TableData.Add(new StatRow { Col1 = "Projected Annual Income (TBWU)", Col2 = $"${projectedAnnualTbwuComp:N0}" });
+                TableData.Add(new StatRow { Col1 = $"{altLabel} PROJECTED INCOME", Col2 = "", IsHeader = true });
+                TableData.Add(new StatRow { Col1 = $"Actual {currentMonthName} ({altLabel})", Col2 = $"${actualMonthAltComp:N0}" });
+                TableData.Add(new StatRow { Col1 = $"Projected {currentMonthName} Income ({altLabel})", Col2 = $"${projectedMonthlyAltComp:N0}" });
+                TableData.Add(new StatRow { Col1 = $"Projected Annual Income ({altLabel})", Col2 = $"${projectedAnnualAltComp:N0}" });
             }
 
             // Target comparison if set
             if (monthlyTarget > 0)
             {
-                var pctOfTarget = (projectedMonthlyRvu / monthlyTarget) * 100;
-                TableData.Add(new StatRow { Col1 = $"% of {currentMonthName} Target", Col2 = $"{pctOfTarget:F0}% ({projectedMonthlyRvu:F0}/{monthlyTarget:F0})" });
+                var pctOfTarget = (projectedMonthlyWu / monthlyTarget) * 100;
+                TableData.Add(new StatRow { Col1 = $"% of {currentMonthName} Target", Col2 = $"{pctOfTarget:F0}% ({projectedMonthlyWu:F0}/{monthlyTarget:F0})" });
             }
 
             // ============ By Modality ============
@@ -2158,20 +2265,21 @@ public partial class StatisticsViewModel : ObservableObject
                 {
                     Modality = g.Key,
                     Studies = g.Count(),
-                    Rvu = g.Sum(r => r.Rvu),
-                    Comp = CompensationRates.CalculateTotalCompensation(g, role)
+                    Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                    Comp = CalculateTotalCompensation(g, role)
                 })
                 .OrderByDescending(m => m.Comp)
                 .ToList();
 
             foreach (var m in modalities)
             {
-                var modCompStr = $"${m.Comp:N0} ({m.Studies} studies, {m.Rvu:F1} RVU)";
+                var modCompStr = $"${m.Comp:N0} ({m.Studies} studies, {m.Wu:F1} {primaryLabel})";
                 if (_tbwuLookup.IsAvailable)
                 {
-                    var modTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
-                        records.Where(r => ExtractModality(r.StudyType) == m.Modality), role);
-                    modCompStr += $" (TBWU: ${modTbwuComp:N0})";
+                    var modAltComp = records
+                        .Where(r => ExtractModality(r.StudyType) == m.Modality)
+                        .Sum(r => CalculateAlternateCompensation(r, role));
+                    modCompStr += $" ({altLabel}: ${modAltComp:N0})";
                 }
                 TableData.Add(new StatRow
                 {
@@ -2295,7 +2403,9 @@ public partial class StatisticsViewModel : ObservableObject
         ShowSideBarChart = false;
         ShowSecondChart = false;
         ShowModalityToggle = false;
-        SideChartTitle = "RVU by Body Part";
+        var primaryLabel = GetPrimaryLabel(records);
+        var altLabel = GetAlternateLabel(records);
+        SideChartTitle = $"{primaryLabel} by Body Part";
 
         Col1Header = "Metric";
         Col2Header = "Value";
@@ -2321,22 +2431,23 @@ public partial class StatisticsViewModel : ObservableObject
             {
                 BodyPart = g.Key,
                 Studies = g.Count(),
-                Rvu = g.Sum(r => r.Rvu),
-                Comp = CompensationRates.CalculateTotalCompensation(g, role)
+                Wu = g.Sum(r => GetPrimaryWorkUnit(r)),
+                Comp = CalculateTotalCompensation(g, role)
             })
-            .OrderByDescending(b => b.Rvu)
+            .OrderByDescending(b => b.Wu)
             .ToList();
 
         var totalComp = bodyPartData.Sum(b => b.Comp);
-        var totalTbwuComp = _tbwuLookup.IsAvailable ? _tbwuLookup.CalculateTotalTbwuCompensation(records, role) : 0.0;
+        var totalWu = bodyPartData.Sum(b => b.Wu);
+        var totalAltComp = _tbwuLookup.IsAvailable ? records.Sum(r => CalculateAlternateCompensation(r, role)) : 0.0;
 
         // ============ SUMMARY ============
         TableData.Add(new StatRow { Col1 = "SUMMARY", Col2 = "", IsHeader = true });
         TableData.Add(new StatRow { Col1 = "Total Studies", Col2 = TotalStudies.ToString() });
-        TableData.Add(new StatRow { Col1 = "Total RVU", Col2 = $"{TotalRvu:F1}" });
+        TableData.Add(new StatRow { Col1 = $"Total {primaryLabel}", Col2 = $"{totalWu:F1}" });
         TableData.Add(new StatRow { Col1 = "Total Compensation", Col2 = $"${totalComp:N0}" });
         if (_tbwuLookup.IsAvailable)
-            TableData.Add(new StatRow { Col1 = "Total Compensation (TBWU)", Col2 = $"${totalTbwuComp:N0}" });
+            TableData.Add(new StatRow { Col1 = $"Total Compensation ({altLabel})", Col2 = $"${totalAltComp:N0}" });
         TableData.Add(new StatRow { Col1 = "Body Regions", Col2 = bodyPartData.Count.ToString() });
 
         // ============ BY BODY PART ============
@@ -2345,13 +2456,14 @@ public partial class StatisticsViewModel : ObservableObject
 
         foreach (var b in bodyPartData)
         {
-            var pctRvu = TotalRvu > 0 ? (b.Rvu / TotalRvu * 100) : 0;
-            var bpCompStr = $"{b.Studies} studies, {b.Rvu:F1} RVU ({pctRvu:F0}%), ${b.Comp:N0}";
+            var pctWu = totalWu > 0 ? (b.Wu / totalWu * 100) : 0;
+            var bpCompStr = $"{b.Studies} studies, {b.Wu:F1} {primaryLabel} ({pctWu:F0}%), ${b.Comp:N0}";
             if (_tbwuLookup.IsAvailable)
             {
-                var bpTbwuComp = _tbwuLookup.CalculateTotalTbwuCompensation(
-                    records.Where(r => ExtractBodyPart(r.StudyType) == b.BodyPart), role);
-                bpCompStr += $" (TBWU: ${bpTbwuComp:N0})";
+                var bpAltComp = records
+                    .Where(r => ExtractBodyPart(r.StudyType) == b.BodyPart)
+                    .Sum(r => CalculateAlternateCompensation(r, role));
+                bpCompStr += $" ({altLabel}: ${bpAltComp:N0})";
             }
             TableData.Add(new StatRow
             {
@@ -2362,9 +2474,9 @@ public partial class StatisticsViewModel : ObservableObject
 
         // ============ TOTALS ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", IsSpacer = true });
-        var totalLineBodyPart = $"{TotalStudies} studies, {TotalRvu:F1} RVU, ${totalComp:N0}";
+        var totalLineBodyPart = $"{TotalStudies} studies, {totalWu:F1} {primaryLabel}, ${totalComp:N0}";
         if (_tbwuLookup.IsAvailable)
-            totalLineBodyPart += $" (TBWU: ${totalTbwuComp:N0})";
+            totalLineBodyPart += $" ({altLabel}: ${totalAltComp:N0})";
         TableData.Add(new StatRow { Col1 = "TOTAL", Col2 = totalLineBodyPart, IsTotal = true });
 
         // Pie chart for side panel
@@ -2387,11 +2499,11 @@ public partial class StatisticsViewModel : ObservableObject
         foreach (var b in bodyPartData.Take(8))
         {
             var color = bodyPartColors.GetValueOrDefault(b.BodyPart, new SKColor(100, 100, 100));
-            var pct = TotalRvu > 0 ? (b.Rvu / TotalRvu * 100) : 0;
+            var pct = totalWu > 0 ? (b.Wu / totalWu * 100) : 0;
             seriesList.Add(new PieSeries<double>
             {
-                Values = new double[] { b.Rvu },
-                Name = $"{b.BodyPart}: {b.Rvu:F1} RVU ({pct:F0}%)",
+                Values = new double[] { b.Wu },
+                Name = $"{b.BodyPart}: {b.Wu:F1} {primaryLabel} ({pct:F0}%)",
                 Fill = new SolidColorPaint(color),
                 DataLabelsSize = 0,
                 ToolTipLabelFormatter = _ => string.Empty
@@ -2443,31 +2555,34 @@ public partial class StatisticsViewModel : ObservableObject
 
         PeriodDescription = $"Comparing: {ComparisonShift1.DisplayLabel} vs {ComparisonShift2.DisplayLabel}";
 
+        var allRecordsCombined = records1.Concat(records2).ToList();
+        var primaryLabel = GetPrimaryLabel(allRecordsCombined);
+
         // Calculate stats for each shift
         int count1 = records1.Count, count2 = records2.Count;
-        double rvu1 = records1.Sum(r => r.Rvu), rvu2 = records2.Sum(r => r.Rvu);
-        double avg1 = count1 > 0 ? rvu1 / count1 : 0;
-        double avg2 = count2 > 0 ? rvu2 / count2 : 0;
+        double wu1 = records1.Sum(r => GetPrimaryWorkUnit(r)), wu2 = records2.Sum(r => GetPrimaryWorkUnit(r));
+        double avg1 = count1 > 0 ? wu1 / count1 : 0;
+        double avg2 = count2 > 0 ? wu2 / count2 : 0;
 
         var duration1 = records1.Any() ? (records1.Max(r => r.Timestamp) - records1.Min(r => r.Timestamp)).TotalHours : 0;
         var duration2 = records2.Any() ? (records2.Max(r => r.Timestamp) - records2.Min(r => r.Timestamp)).TotalHours : 0;
         duration1 = Math.Max(1, duration1);
         duration2 = Math.Max(1, duration2);
 
-        var rvuHr1 = rvu1 / duration1;
-        var rvuHr2 = rvu2 / duration2;
+        var wuHr1 = wu1 / duration1;
+        var wuHr2 = wu2 / duration2;
 
         // ============ BASIC COMPARISON ============
         TableData.Add(new StatRow { Col1 = "BASIC COMPARISON", Col2 = "", Col3 = "", Col4 = "", IsHeader = true });
         AddComparisonRow("Total Studies", count1, count2, "{0:N0}");
-        AddComparisonRow("Total RVU", rvu1, rvu2, "{0:F1}");
-        AddComparisonRow("Avg RVU/Study", avg1, avg2, "{0:F2}");
+        AddComparisonRow($"Total {primaryLabel}", wu1, wu2, "{0:F1}");
+        AddComparisonRow($"Avg {primaryLabel}/Study", avg1, avg2, "{0:F2}");
 
         // ============ EFFICIENCY ============
         TableData.Add(new StatRow { Col1 = "", Col2 = "", Col3 = "", Col4 = "", IsSpacer = true });
         TableData.Add(new StatRow { Col1 = "EFFICIENCY", Col2 = "", Col3 = "", Col4 = "", IsHeader = true });
         AddComparisonRow("Duration (hrs)", duration1, duration2, "{0:F1}");
-        AddComparisonRow("RVU/Hour", rvuHr1, rvuHr2, "{0:F1}");
+        AddComparisonRow($"{primaryLabel}/Hour", wuHr1, wuHr2, "{0:F1}");
         AddComparisonRow("Studies/Hour", count1 / duration1, count2 / duration2, "{0:F1}");
 
         // ============ MODALITY BREAKDOWN ============
@@ -2475,9 +2590,9 @@ public partial class StatisticsViewModel : ObservableObject
         TableData.Add(new StatRow { Col1 = "BY MODALITY", Col2 = "", Col3 = "", Col4 = "", IsHeader = true });
 
         var mod1 = records1.GroupBy(r => ExtractModality(r.StudyType))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Rvu));
+            .ToDictionary(g => g.Key, g => g.Sum(r => GetPrimaryWorkUnit(r)));
         var mod2 = records2.GroupBy(r => ExtractModality(r.StudyType))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Rvu));
+            .ToDictionary(g => g.Key, g => g.Sum(r => GetPrimaryWorkUnit(r)));
 
         var allMods = mod1.Keys.Union(mod2.Keys).OrderBy(m => m).ToList();
 
@@ -2485,17 +2600,18 @@ public partial class StatisticsViewModel : ObservableObject
         {
             var v1 = mod1.GetValueOrDefault(mod, 0);
             var v2 = mod2.GetValueOrDefault(mod, 0);
-            AddComparisonRow($"  {mod} RVU", v1, v2, "{0:F1}");
+            AddComparisonRow($"  {mod} {primaryLabel}", v1, v2, "{0:F1}");
         }
 
         // ============ COMPENSATION ============
-        var baseRate = _dataManager.Settings.BaseRvuRate;
-        if (baseRate > 0)
+        var role = _dataManager.Settings.Role;
         {
+            var comp1 = CalculateTotalCompensation(records1, role);
+            var comp2 = CalculateTotalCompensation(records2, role);
             TableData.Add(new StatRow { Col1 = "", Col2 = "", Col3 = "", Col4 = "", IsSpacer = true });
             TableData.Add(new StatRow { Col1 = "COMPENSATION", Col2 = "", Col3 = "", Col4 = "", IsHeader = true });
-            AddComparisonRow("Total Compensation", rvu1 * baseRate, rvu2 * baseRate, "${0:N0}");
-            AddComparisonRow("Comp/Hour", (rvu1 * baseRate) / duration1, (rvu2 * baseRate) / duration2, "${0:N0}");
+            AddComparisonRow("Total Compensation", comp1, comp2, "${0:N0}");
+            AddComparisonRow("Comp/Hour", comp1 / duration1, comp2 / duration2, "${0:N0}");
         }
 
         // ============ CHART - Bar comparison by modality ============
